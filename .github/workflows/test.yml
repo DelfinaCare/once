@@ -1,0 +1,46 @@
+name: Python test
+
+on: [push, pull_request]
+
+jobs:
+  test:
+    name: test-py${{ matrix.python-version}}-on-${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-20.04, windows-2019, macos-11]
+        python-version: ["3.10", "3.11", "3.12-dev", "pypy3.10"]
+    steps:
+        - uses: actions/checkout@v3
+        - name: Set up Python ${{ matrix.python-version }}
+          uses: actions/setup-python@v4
+          with:
+            python-version: ${{ matrix.python-version }}
+            cache: pip
+        - run: pip install pytest
+        - run: pytest . --junitxml=junit/test_py${{ matrix.python-version }}_on_${{ matrix.os }}.xml
+        - name: Upload pytest test results
+          uses: actions/upload-artifact@v3
+          if: success() || failure()
+          with:
+            name: test-py${{ matrix.python-version}}-on-${{ matrix.os }}
+            path: junit/test_py${{ matrix.python-version }}_on_${{ matrix.os }}.xml
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: psf/black@stable
+
+  mypy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-python@v4
+        with:
+          python-version: 3.11
+          cache: pip
+      - run: |
+          pip install mypy
+          mypy .

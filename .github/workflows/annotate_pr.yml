@@ -1,0 +1,30 @@
+name: Annotate Pull Request
+
+# In a separate workflow because of
+# https://securitylab.github.com/research/github-actions-preventing-pwn-requests/
+on:
+  workflow_run:
+    workflows:
+      - Python test
+    types:
+      - completed
+
+jobs:
+  python_test_reporter:
+    runs-on: ubuntu-latest
+    permissions:
+        checks: write
+    if: github.event.workflow_run.name == 'Python test'
+    strategy:
+        fail-fast: false
+        matrix:
+          os: [ubuntu-20.04, windows-2019, macos-11]
+          python-version: ["3.10", "3.11", "3.12-dev"]
+    steps:
+      - name: Test Report
+        uses: dorny/test-reporter@v1
+        with:
+          name: test-py${{ matrix.python-version}}-on-${{ matrix.os }}
+          reporter: java-junit
+          artifact: test-py${{ matrix.python-version}}-on-${{ matrix.os }}
+          path: test_py${{ matrix.python-version }}_on_${{ matrix.os }}.xml

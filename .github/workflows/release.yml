@@ -1,0 +1,55 @@
+name: Release Wheels
+
+on:
+  push:
+  release:
+    types:
+      - published
+
+jobs:
+  build_wheel:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+    - uses: actions/setup-python@v4
+      with:
+        python-version: 3.11
+        cache: pip
+    - run: pip wheel .
+    - uses: actions/upload-artifact@v3
+      with:
+        name: wheel
+        path: ./*.whl
+
+  upload_wheel_test:
+    needs: [build_wheel]
+    runs-on: ubuntu-latest
+    environment:
+        name: pypi
+        url: https://pypi.org/p/once-py
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v3
+        with:
+            name: wheel
+            path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+            repository-url: https://test.pypi.org/legacy/
+
+  upload_wheel:
+    needs: [build_wheel]
+    runs-on: ubuntu-latest
+    if: github.event_name == 'release' && github.event.action == 'published'
+    environment:
+        name: pypi
+        url: https://pypi.org/p/once-py
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v3
+        with:
+            name: wheel
+            path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
