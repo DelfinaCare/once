@@ -94,7 +94,8 @@ class once_per_class(_OnceBase):  # pylint: disable=invalid-name
             func = functools.partial(self.func.__func__, cls)
             return functools.partial(self._execute_call_once, func)
         if isinstance(self.func, staticmethod):
-            return functools.partial(self._execute_call_once, self.func)
+            # The additional __func__ is required for python <= 3.9
+            return functools.partial(self._execute_call_once, self.func.__func__)
         return functools.partial(self._execute_call_once, self.func, obj)
 
 
