@@ -1,8 +1,10 @@
 """Utility for initialization ensuring functions are called only once."""
 import abc
-import inspect
+import collections.abc
 import functools
+import inspect
 import threading
+import typing
 import weakref
 
 
@@ -10,7 +12,7 @@ def _new_lock() -> threading.Lock:
     return threading.Lock()
 
 
-def _is_method(func):
+def _is_method(func: collections.abc.Callable):
     """Determine if a function is a method on a class."""
     if isinstance(func, (classmethod, staticmethod)):
         return True
@@ -21,22 +23,22 @@ def _is_method(func):
 class _OnceBase(abc.ABC):
     """Abstract Base Class for once function decorators."""
 
-    def __init__(self, func):
+    def __init__(self, func: collections.abc.Callable):
         self._inspect_function(func)
         functools.update_wrapper(self, func)
         self.lock = _new_lock()
         self.called = False
-        self.return_value = None
+        self.return_value: typing.Any = None
         self.func = func
 
     @abc.abstractmethod
-    def _inspect_function(self, func):
+    def _inspect_function(self, func: collections.abc.Callable):
         """Inspect the passed-in function to ensure it can be wrapped.
 
         This function should raise a SyntaxError if the passed-in function is
         not suitable."""
 
-    def _execute_call_once(self, func, *args, **kwargs):
+    def _execute_call_once(self, func: collections.abc.Callable, *args, **kwargs):
         if self.called:
             return self.return_value
         with self.lock:
@@ -66,7 +68,7 @@ class once(_OnceBase):  # pylint: disable=invalid-name
     value will never be deleted.
     """
 
-    def _inspect_function(self, func):
+    def _inspect_function(self, func: collections.abc.Callable):
         if _is_method(func):
             raise SyntaxError(
                 "Attempting to use @once.once decorator on method "
@@ -102,12 +104,14 @@ class once_per_class(_OnceBase):  # pylint: disable=invalid-name
 class once_per_instance(_OnceBase):  # pylint: disable=invalid-name
     """A version of once for class methods which runs once per instance."""
 
-    def __init__(self, func):
+    def __init__(self, func: collections.abc.Callable):
         super().__init__(func)
-        self.return_value = weakref.WeakKeyDictionary()
-        self.inflight_lock = {}
+        self.return_value: weakref.WeakKeyDictionary[
+            typing.Any, typing.Any
+        ] = weakref.WeakKeyDictionary()
+        self.inflight_lock: typing.Dict[typing.Any, threading.Lock] = {}
 
-    def _inspect_function(self, func):
+    def _inspect_function(self, func: collections.abc.Callable):
         if isinstance(func, (classmethod, staticmethod)):
             raise SyntaxError("Must use @once.once_per_class on classmethod and staticmethod")
         if not _is_method(func):
