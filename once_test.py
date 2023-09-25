@@ -62,6 +62,15 @@ class TestOnce(unittest.TestCase):
         self.assertEqual(counting_fn(2), 1)
         self.assertEqual(counter.value, 1)
 
+    def test_iterator(self):
+        @once.once
+        def yielding_iterator():
+            for i in range(3):
+                yield i
+
+        self.assertEqual(yielding_iterator(), (0, 1, 2))
+        self.assertEqual(yielding_iterator(), (0, 1, 2))
+
     def test_threaded_single_function(self):
         counting_fn, counter = generate_once_counter_fn()
         with concurrent.futures.ThreadPoolExecutor(max_workers=16) as executor:
@@ -336,6 +345,80 @@ class TestOnce(unittest.TestCase):
 
         self.assertEqual(_CallOnceClass.value(), 1)
         self.assertEqual(_CallOnceClass.value(), 1)
+
+
+class TestOnceAsync(unittest.IsolatedAsyncioTestCase):
+    async def test_fn_called_once(self):
+        counter1 = Counter()
+
+        @once.once
+        async def counting_fn1():
+            return counter1.get_incremented()
+
+        counter2 = Counter()
+        # We should get a different value than the previous function
+        counter2.get_incremented()
+
+        @once.once
+        async def counting_fn2():
+            return counter2.get_incremented()
+
+        self.assertEqual(await counting_fn1(), 1)
+        self.assertEqual(await counting_fn1(), 1)
+        self.assertEqual(await counting_fn2(), 2)
+        self.assertEqual(await counting_fn2(), 2)
+
+    async def test_iterator(self):
+        counter = Counter()
+
+        @once.once
+        async def async_yielding_iterator():
+            yield counter.get_incremented()
+            for i in range(3):
+                yield i
+
+        self.assertEqual(await async_yielding_iterator(), (1, 0, 1, 2))
+        self.assertEqual(await async_yielding_iterator(), (1, 0, 1, 2))
+
+    async def test_once_per_class(self):
+        class _CallOnceClass(Counter):
+            @once.once_per_class
+            async def once_fn(self):
+                return self.get_incremented()
+
+        a = _CallOnceClass()  # pylint: disable=invalid-name
+        b = _CallOnceClass()  # pylint: disable=invalid-name
+
+        self.assertEqual(await a.once_fn(), 1)
+        self.assertEqual(await a.once_fn(), 1)
+        self.assertEqual(await b.once_fn(), 1)
+        self.assertEqual(await b.once_fn(), 1)
+
+    async def test_once_per_class_classmethod(self):
+        counter = Counter()
+
+        class _CallOnceClass:
+            @once.once_per_class
+            @classmethod
+            async def value(cls):
+                nonlocal counter
+                return counter.get_incremented()
+
+        self.assertEqual(await _CallOnceClass.value(), 1)
+        self.assertEqual(await _CallOnceClass.value(), 1)
+
+    async def test_once_per_class_staticmethod(self):
+        counter = Counter()
+
+        class _CallOnceClass:
+            @once.once_per_class
+            @staticmethod
+            async def value():
+                nonlocal counter
+                return counter.get_incremented()
+
+        self.assertEqual(await _CallOnceClass.value(), 1)
+        self.assertEqual(await _CallOnceClass.value(), 1)
 
 
 if __name__ == "__main__":
