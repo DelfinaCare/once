@@ -6,7 +6,6 @@ import functools
 import inspect
 import threading
 import typing
-import types
 import weakref
 
 
@@ -31,6 +30,12 @@ class _OnceBase(abc.ABC):
         self.called = False
         self.return_value: typing.Any = None
         self.is_asyncgen = inspect.isasyncgenfunction(self.func)
+        if self.is_asyncgen:
+            raise SyntaxError("async generators are not (yet) supported")
+        self.is_syncgen = inspect.isgeneratorfunction(self.func)
+        # The function inspect.isawaitable is a bit of a misnomer - it refers
+        # to the awaitable result of an async function, not the async function
+        # itself.
         self.is_async = True if self.is_asyncgen else inspect.iscoroutinefunction(self.func)
         if self.is_async:
             self.async_lock = asyncio.Lock()
@@ -47,14 +52,20 @@ class _OnceBase(abc.ABC):
         It should return the function which should be executed once.
         """
 
+    def _sync_return(self):
+        if self.is_syncgen:
+            self.return_value.__iter__()
+        return self.return_value
+
     async def _execute_call_once_async(self, func: collections.abc.Callable, *args, **kwargs):
         if self.called:
             return self.return_value
         async with self.async_lock:
             if self.called:
                 return self.return_value
+            # Currently unreachable code - Async iterators are disabled for now.
             if self.is_asyncgen:
-                self.return_value = tuple([i async for i in func(*args, **kwargs)])
+                self.return_value = [i async for i in func(*args, **kwargs)]
             else:
                 self.return_value = await func(*args, **kwargs)
             self.called = True
@@ -62,15 +73,17 @@ class _OnceBase(abc.ABC):
 
     def _execute_call_once_sync(self, func: collections.abc.Callable, *args, **kwargs):
         if self.called:
-            return self.return_value
+            return self._sync_return()
         with self.lock:
             if self.called:
-                return self.return_value
+                return self._sync_return()
             self.return_value = func(*args, **kwargs)
-            if isinstance(self.return_value, types.GeneratorType):
+            if self.is_syncgen:
+                # A potential optimization is to evaluate the iterator lazily,
+                # as opposed to eagerly like we do here.
                 self.return_value = tuple(self.return_value)
             self.called = True
-            return self.return_value
+            return self._sync_return()
 
     def _execute_call_once(self, func: collections.abc.Callable, *args, **kwargs):
         if self.is_async:
@@ -155,6 +168,8 @@ class once_per_instance(_OnceBase):  # pylint: disable=invalid-name
         self.inflight_lock: typing.Dict[typing.Any, threading.Lock] = {}
 
     def _inspect_function(self, func: collections.abc.Callable):
+        if inspect.isasyncgenfunction(func) or inspect.iscoroutinefunction(func):
+            raise SyntaxError("once_per_instance not (yet) supported for async")
         if isinstance(func, (classmethod, staticmethod)):
             raise SyntaxError("Must use @once.once_per_class on classmethod and staticmethod")
         if not _is_method(func):

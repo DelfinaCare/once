@@ -68,8 +68,8 @@ class TestOnce(unittest.TestCase):
             for i in range(3):
                 yield i
 
-        self.assertEqual(yielding_iterator(), (0, 1, 2))
-        self.assertEqual(yielding_iterator(), (0, 1, 2))
+        self.assertEqual(list(yielding_iterator()), [0, 1, 2])
+        self.assertEqual(list(yielding_iterator()), [0, 1, 2])
 
     def test_threaded_single_function(self):
         counting_fn, counter = generate_once_counter_fn()
@@ -371,14 +371,16 @@ class TestOnceAsync(unittest.IsolatedAsyncioTestCase):
     async def test_iterator(self):
         counter = Counter()
 
-        @once.once
-        async def async_yielding_iterator():
-            yield counter.get_incremented()
-            for i in range(3):
-                yield i
+        with self.assertRaises(SyntaxError):
 
-        self.assertEqual(await async_yielding_iterator(), (1, 0, 1, 2))
-        self.assertEqual(await async_yielding_iterator(), (1, 0, 1, 2))
+            @once.once
+            async def async_yielding_iterator():
+                yield counter.get_incremented()
+                for i in range(3):
+                    yield i
+
+        # self.assertEqual([i async for i in async_yielding_iterator()], [1, 0, 1, 2])
+        # self.assertEqual([i async for i in async_yielding_iterator()], [1, 0, 1, 2])
 
     async def test_once_per_class(self):
         class _CallOnceClass(Counter):
