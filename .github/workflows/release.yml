@@ -27,6 +27,7 @@ jobs:
   upload_wheel_test:
     needs: [build_wheel]
     runs-on: ubuntu-latest
+    if: github.repository_owner == 'DelfinaCare'
     environment:
         name: pypi-test
         url: https://pypi.org/p/once-py
