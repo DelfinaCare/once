@@ -29,9 +29,15 @@ class _OnceBase(abc.ABC):
         self.func = self._inspect_function(func)
         self.called = False
         self.return_value: typing.Any = None
+        
         self.is_asyncgen = inspect.isasyncgenfunction(self.func)
         if self.is_asyncgen:
-            raise SyntaxError("async generators are not (yet) supported")
+            self.asyncgen_finished = False
+            self.asyncgen_generator = None
+            self.asyncgen_results = []
+
+        # Only works for one way generators, not anything that requires send for now.
+        # Async generators do support send.
         self.is_syncgen = inspect.isgeneratorfunction(self.func)
         # The function inspect.isawaitable is a bit of a misnomer - it refers
         # to the awaitable result of an async function, not the async function
@@ -57,15 +63,43 @@ class _OnceBase(abc.ABC):
             self.return_value.__iter__()
         return self.return_value
 
+    async def _async_gen_proxy(self, func, *args, **kwargs):
+        i = 0
+        send = None
+        while True:
+            async with self.async_lock:
+                if self.asyncgen_generator is None and not self.asyncgen_finished:
+                    # We're the first! Do some setup.
+                    self.asyncgen_generator = func(*args, **kwargs)
+
+                if i == len(self.asyncgen_results) and not self.asyncgen_finished:
+                    # We're at the lead, so we need to increment the iterator.
+                    # We just store the value in self.asyncgen_results so that
+                    # we can later yield it outside of the lock.
+                    try:
+                        next_val = await self.asyncgen_generator.asend(send)
+                        self.asyncgen_results.append(next_val)
+                    except StopAsyncIteration:
+                        self.asyncgen_generator = None  # Allow this to be GCed.
+                        self.asyncgen_finished = True
+                        return
+                elif i == len(self.asyncgen_results) and self.asyncgen_finished:
+                    # All done.
+                    return
+                else:
+                    # Nothing to do, asyncgen_results[i] already has the correct
+                    # value.   
+                    pass 
+            send = yield self.asyncgen_results[i]
+            i += 1
+        
+
     async def _execute_call_once_async(self, func: collections.abc.Callable, *args, **kwargs):
         if self.called:
             return self.return_value
         async with self.async_lock:
             if self.called:
                 return self.return_value
-            # Currently unreachable code - Async iterators are disabled for now.
-            if self.is_asyncgen:
-                self.return_value = [i async for i in func(*args, **kwargs)]
             else:
                 self.return_value = await func(*args, **kwargs)
             self.called = True
@@ -86,6 +120,8 @@ class _OnceBase(abc.ABC):
             return self._sync_return()
 
     def _execute_call_once(self, func: collections.abc.Callable, *args, **kwargs):
+        if self.is_asyncgen:
+            return self._async_gen_proxy(func, *args, **kwargs)
         if self.is_async:
             return self._execute_call_once_async(func, *args, **kwargs)
         return self._execute_call_once_sync(func, *args, **kwargs)
