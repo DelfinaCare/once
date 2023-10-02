@@ -17,8 +17,13 @@ import once
 if sys.version_info.minor < 10:
     print(f"Redefining anext for python 3.{sys.version_info.minor}")
 
-    async def anext(iter, *args, **kwargs):
-        return await iter.__anext__(*args, **kwargs)
+    async def anext(iter, default=StopAsyncIteration):
+        if default != StopAsyncIteration:
+            try:
+                return await iter.__anext__()
+            except StopAsyncIteration:
+                return default
+        return await iter.__anext__()
 
 
 class Counter:
