@@ -475,6 +475,7 @@ class TestOnceAsync(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await gen_1.asend(None), 5)
         self.assertEqual(await anext(gen_1, None), None)
 
+    @unittest.skipIf(not hasattr(asyncio, "Barrier"), "Requires Barrier to evaluate")
     async def test_iterator_lock_not_held_during_evaluation(self):
         counter = Counter()
 
