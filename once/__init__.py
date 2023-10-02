@@ -29,12 +29,12 @@ class _OnceBase(abc.ABC):
         self.func = self._inspect_function(func)
         self.called = False
         self.return_value: typing.Any = None
-        
+
         self.is_asyncgen = inspect.isasyncgenfunction(self.func)
         if self.is_asyncgen:
             self.asyncgen_finished = False
             self.asyncgen_generator = None
-            self.asyncgen_results = []
+            self.asyncgen_results: list = []
 
         # Only works for one way generators, not anything that requires send for now.
         # Async generators do support send.
@@ -88,11 +88,10 @@ class _OnceBase(abc.ABC):
                     return
                 else:
                     # Nothing to do, asyncgen_results[i] already has the correct
-                    # value.   
-                    pass 
+                    # value.
+                    pass
             send = yield self.asyncgen_results[i]
             i += 1
-        
 
     async def _execute_call_once_async(self, func: collections.abc.Callable, *args, **kwargs):
         if self.called:

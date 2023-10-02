@@ -2,6 +2,7 @@
 # pylint: disable=missing-function-docstring
 import concurrent.futures
 import inspect
+import sys
 import time
 import unittest
 from unittest import mock
@@ -11,6 +12,10 @@ import gc
 
 import once
 
+
+if sys.version_info.minor < 10:
+    async def anext(iter):
+        return await iter.__anext__()
 
 class Counter:
     """Holding object for a counter.
