@@ -70,7 +70,7 @@ class _OnceBase(abc.ABC):
         next_val = None
 
         # A copy of self.async_generating that we can access outside of the lock.
-        async_generating = None  
+        async_generating = None
 
         # Indicates that we're tied for the head generator, but someone started generating the next
         # result first, so we should just poll until the result is available.
@@ -94,7 +94,7 @@ class _OnceBase(abc.ABC):
                         # We're at the lead, but someone else is generating the next value
                         # so we just hop back onto the next iteration of the loop
                         # until it's ready.
-                        waiting_for_async_generating =  True
+                        waiting_for_async_generating = True
                         continue
                     # We're at the lead and no one else is generating, so we need to increment
                     # the iterator. We just store the value in self.asyncgen_results so that
@@ -105,7 +105,7 @@ class _OnceBase(abc.ABC):
                     # All done.
                     return
                 else:
-                    # We already have the correct result, so we grab it here to 
+                    # We already have the correct result, so we grab it here to
                     # yield it outside the lock.
                     next_val = self.asyncgen_results[i]
 

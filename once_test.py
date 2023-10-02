@@ -489,12 +489,14 @@ class TestOnceAsync(unittest.IsolatedAsyncioTestCase):
         # Loop until task1 is stuck waiting.
         while barrier.n_waiting < 1:
             await asyncio.sleep(0)
-        
-        self.assertEqual(await gen_2.asend(None), 1) # Should return immediately even though task1 is stuck.
+
+        self.assertEqual(
+            await gen_2.asend(None), 1
+        )  # Should return immediately even though task1 is stuck.
 
         # .asend("None") should be ignored because task1 has already started,
         # so task2 should still return 2 instead of ending iteration.
-        task2 = asyncio.create_task(gen_2.asend(None))  
+        task2 = asyncio.create_task(gen_2.asend(None))
 
         await barrier.wait()
 
