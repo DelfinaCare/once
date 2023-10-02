@@ -14,8 +14,10 @@ import once
 
 
 if sys.version_info.minor < 10:
+
     async def anext(iter):
         return await iter.__anext__()
+
 
 class Counter:
     """Holding object for a counter.
