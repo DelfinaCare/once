@@ -29,9 +29,16 @@ class _OnceBase(abc.ABC):
         self.func = self._inspect_function(func)
         self.called = False
         self.return_value: typing.Any = None
+
         self.is_asyncgen = inspect.isasyncgenfunction(self.func)
         if self.is_asyncgen:
-            raise SyntaxError("async generators are not (yet) supported")
+            self.asyncgen_finished = False
+            self.asyncgen_generator = None
+            self.asyncgen_results: list = []
+            self.async_generating = False
+
+        # Only works for one way generators, not anything that requires send for now.
+        # Async generators do support send.
         self.is_syncgen = inspect.isgeneratorfunction(self.func)
         # The function inspect.isawaitable is a bit of a misnomer - it refers
         # to the awaitable result of an async function, not the async function
@@ -57,15 +64,75 @@ class _OnceBase(abc.ABC):
             self.return_value.__iter__()
         return self.return_value
 
+    async def _async_gen_proxy(self, func, *args, **kwargs):
+        i = 0
+        send = None
+        next_val = None
+
+        # A copy of self.async_generating that we can access outside of the lock.
+        async_generating = None
+
+        # Indicates that we're tied for the head generator, but someone started generating the next
+        # result first, so we should just poll until the result is available.
+        waiting_for_async_generating = False
+
+        while True:
+            if waiting_for_async_generating:
+                # This is a load bearing sleep. We're waiting for the leader to generate the result, but
+                # we have control of the lock, so the async with will never yield execution to the event loop,
+                # so we would loop forever. By awaiting sleep(0), we yield execution which will allow us to
+                # poll for self.async_generating readiness.
+                await asyncio.sleep(0)
+                waiting_for_async_generating = False
+            async with self.async_lock:
+                if self.asyncgen_generator is None and not self.asyncgen_finished:
+                    # We're the first! Do some setup.
+                    self.asyncgen_generator = func(*args, **kwargs)
+
+                if i == len(self.asyncgen_results) and not self.asyncgen_finished:
+                    if self.async_generating:
+                        # We're at the lead, but someone else is generating the next value
+                        # so we just hop back onto the next iteration of the loop
+                        # until it's ready.
+                        waiting_for_async_generating = True
+                        continue
+                    # We're at the lead and no one else is generating, so we need to increment
+                    # the iterator. We just store the value in self.asyncgen_results so that
+                    # we can later yield it outside of the lock.
+                    self.async_generating = self.asyncgen_generator.asend(send)
+                    async_generating = self.async_generating
+                elif i == len(self.asyncgen_results) and self.asyncgen_finished:
+                    # All done.
+                    return
+                else:
+                    # We already have the correct result, so we grab it here to
+                    # yield it outside the lock.
+                    next_val = self.asyncgen_results[i]
+
+            if async_generating:
+                try:
+                    next_val = await async_generating
+                except StopAsyncIteration:
+                    async with self.async_lock:
+                        self.asyncgen_generator = None  # Allow this to be GCed.
+                        self.asyncgen_finished = True
+                        self.async_generating = None
+                        async_generating = None
+                        return
+                async with self.async_lock:
+                    self.asyncgen_results.append(next_val)
+                    async_generating = None
+                    self.async_generating = None
+
+            send = yield next_val
+            i += 1
+
     async def _execute_call_once_async(self, func: collections.abc.Callable, *args, **kwargs):
         if self.called:
             return self.return_value
         async with self.async_lock:
             if self.called:
                 return self.return_value
-            # Currently unreachable code - Async iterators are disabled for now.
-            if self.is_asyncgen:
-                self.return_value = [i async for i in func(*args, **kwargs)]
             else:
                 self.return_value = await func(*args, **kwargs)
             self.called = True
@@ -86,6 +153,8 @@ class _OnceBase(abc.ABC):
             return self._sync_return()
 
     def _execute_call_once(self, func: collections.abc.Callable, *args, **kwargs):
+        if self.is_asyncgen:
+            return self._async_gen_proxy(func, *args, **kwargs)
         if self.is_async:
             return self._execute_call_once_async(func, *args, **kwargs)
         return self._execute_call_once_sync(func, *args, **kwargs)

@@ -1,7 +1,9 @@
 """Unit tests for once decorators."""
 # pylint: disable=missing-function-docstring
+import asyncio
 import concurrent.futures
 import inspect
+import sys
 import time
 import unittest
 from unittest import mock
@@ -10,6 +12,18 @@ import weakref
 import gc
 
 import once
+
+
+if sys.version_info.minor < 10:
+    print(f"Redefining anext for python 3.{sys.version_info.minor}")
+
+    async def anext(iter, default=StopAsyncIteration):
+        if default != StopAsyncIteration:
+            try:
+                return await iter.__anext__()
+            except StopAsyncIteration:
+                return default
+        return await iter.__anext__()
 
 
 class Counter:
@@ -368,19 +382,134 @@ class TestOnceAsync(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await counting_fn2(), 2)
         self.assertEqual(await counting_fn2(), 2)
 
+    async def test_inspect_func(self):
+        @once.once
+        async def async_func():
+            return True
+
+        # Unfortunately these are corrupted by our @once.once.
+        # self.assertFalse(inspect.isasyncgenfunction(async_func))
+        # self.assertTrue(inspect.iscoroutinefunction(async_func))
+
+        coroutine = async_func()
+        self.assertTrue(inspect.iscoroutine(coroutine))
+        self.assertTrue(inspect.isawaitable(coroutine))
+        self.assertFalse(inspect.isasyncgen(coroutine))
+
+        # Just for cleanup.
+        await coroutine
+
+    async def test_inspect_iterator(self):
+        @once.once
+        async def async_yielding_iterator():
+            for i in range(3):
+                yield i
+
+        # Unfortunately these are corrupted by our @once.once.
+        # self.assertTrue(inspect.isasyncgenfunction(async_yielding_iterator))
+        # self.assertTrue(inspect.iscoroutinefunction(async_yielding_iterator))
+
+        coroutine = async_yielding_iterator()
+        self.assertFalse(inspect.iscoroutine(coroutine))
+        self.assertFalse(inspect.isawaitable(coroutine))
+        self.assertTrue(inspect.isasyncgen(coroutine))
+
+        # Just for cleanup.
+        async for i in coroutine:
+            pass
+
     async def test_iterator(self):
         counter = Counter()
 
-        with self.assertRaises(SyntaxError):
-
-            @once.once
-            async def async_yielding_iterator():
+        @once.once
+        async def async_yielding_iterator():
+            for i in range(3):
                 yield counter.get_incremented()
-                for i in range(3):
-                    yield i
 
-        # self.assertEqual([i async for i in async_yielding_iterator()], [1, 0, 1, 2])
-        # self.assertEqual([i async for i in async_yielding_iterator()], [1, 0, 1, 2])
+        self.assertEqual([i async for i in async_yielding_iterator()], [1, 2, 3])
+        self.assertEqual([i async for i in async_yielding_iterator()], [1, 2, 3])
+
+    async def test_iterator_is_lazily_evaluted(self):
+        counter = Counter()
+
+        @once.once
+        async def async_yielding_iterator():
+            for i in range(3):
+                yield counter.get_incremented()
+
+        gen_1 = async_yielding_iterator()
+        gen_2 = async_yielding_iterator()
+        gen_3 = async_yielding_iterator()
+
+        self.assertEqual(counter.value, 0)
+        self.assertEqual(await anext(gen_1), 1)
+        self.assertEqual(await anext(gen_2), 1)
+        self.assertEqual(await anext(gen_2), 2)
+        self.assertEqual(await anext(gen_2), 3)
+        self.assertEqual(await anext(gen_1), 2)
+        self.assertEqual(await anext(gen_3), 1)
+        self.assertEqual(await anext(gen_3), 2)
+        self.assertEqual(await anext(gen_3), 3)
+        self.assertEqual(await anext(gen_3, None), None)
+        self.assertEqual(await anext(gen_2, None), None)
+        self.assertEqual(await anext(gen_1), 3)
+        self.assertEqual(await anext(gen_2, None), None)
+
+    async def test_receiving_iterator(self):
+        @once.once
+        async def async_receiving_iterator():
+            next = yield 1
+            while next is not None:
+                next = yield next
+
+        gen_1 = async_receiving_iterator()
+        gen_2 = async_receiving_iterator()
+        self.assertEqual(await gen_1.asend(None), 1)
+        self.assertEqual(await gen_1.asend(1), 1)
+        self.assertEqual(await gen_1.asend(3), 3)
+        self.assertEqual(await gen_2.asend(None), 1)
+        self.assertEqual(await gen_2.asend(None), 1)
+        self.assertEqual(await gen_2.asend(None), 3)
+        self.assertEqual(await gen_2.asend(5), 5)
+        self.assertEqual(await anext(gen_2, None), None)
+        self.assertEqual(await gen_1.asend(None), 5)
+        self.assertEqual(await anext(gen_1, None), None)
+
+    @unittest.skipIf(not hasattr(asyncio, "Barrier"), "Requires Barrier to evaluate")
+    async def test_iterator_lock_not_held_during_evaluation(self):
+        counter = Counter()
+
+        @once.once
+        async def async_yielding_iterator():
+            barrier = yield counter.get_incremented()
+            while barrier is not None:
+                await barrier.wait()
+                barrier = yield counter.get_incremented()
+
+        gen_1 = async_yielding_iterator()
+        gen_2 = async_yielding_iterator()
+        barrier = asyncio.Barrier(2)
+        self.assertEqual(await gen_1.asend(None), 1)
+        task1 = asyncio.create_task(gen_1.asend(barrier))
+
+        # Loop until task1 is stuck waiting.
+        while barrier.n_waiting < 1:
+            await asyncio.sleep(0)
+
+        self.assertEqual(
+            await gen_2.asend(None), 1
+        )  # Should return immediately even though task1 is stuck.
+
+        # .asend("None") should be ignored because task1 has already started,
+        # so task2 should still return 2 instead of ending iteration.
+        task2 = asyncio.create_task(gen_2.asend(None))
+
+        await barrier.wait()
+
+        self.assertEqual(await task1, 2)
+        self.assertEqual(await task2, 2)
+        self.assertEqual(await anext(gen_1, None), None)
+        self.assertEqual(await anext(gen_2, None), None)
 
     async def test_once_per_class(self):
         class _CallOnceClass(Counter):
