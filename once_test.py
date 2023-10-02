@@ -1,5 +1,6 @@
 """Unit tests for once decorators."""
 # pylint: disable=missing-function-docstring
+import asyncio
 import concurrent.futures
 import inspect
 import sys
@@ -14,9 +15,10 @@ import once
 
 
 if sys.version_info.minor < 10:
+    print(f"Redefining anext for python 3.{sys.version_info.minor}")
 
-    async def anext(iter):
-        return await iter.__anext__()
+    async def anext(iter, *args, **kwargs):
+        return await iter.__anext__(*args, **kwargs)
 
 
 class Counter:
@@ -467,6 +469,39 @@ class TestOnceAsync(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await anext(gen_2, None), None)
         self.assertEqual(await gen_1.asend(None), 5)
         self.assertEqual(await anext(gen_1, None), None)
+
+    async def test_iterator_lock_not_held_during_evaluation(self):
+        counter = Counter()
+
+        @once.once
+        async def async_yielding_iterator():
+            barrier = yield counter.get_incremented()
+            while barrier is not None:
+                await barrier.wait()
+                barrier = yield counter.get_incremented()
+
+        gen_1 = async_yielding_iterator()
+        gen_2 = async_yielding_iterator()
+        barrier = asyncio.Barrier(2)
+        self.assertEqual(await gen_1.asend(None), 1)
+        task1 = asyncio.create_task(gen_1.asend(barrier))
+
+        # Loop until task1 is stuck waiting.
+        while barrier.n_waiting < 1:
+            await asyncio.sleep(0)
+        
+        self.assertEqual(await gen_2.asend(None), 1) # Should return immediately even though task1 is stuck.
+
+        # .asend("None") should be ignored because task1 has already started,
+        # so task2 should still return 2 instead of ending iteration.
+        task2 = asyncio.create_task(gen_2.asend(None))  
+
+        await barrier.wait()
+
+        self.assertEqual(await task1, 2)
+        self.assertEqual(await task2, 2)
+        self.assertEqual(await anext(gen_1, None), None)
+        self.assertEqual(await anext(gen_2, None), None)
 
     async def test_once_per_class(self):
         class _CallOnceClass(Counter):
