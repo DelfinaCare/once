@@ -56,6 +56,85 @@ def generate_once_counter_fn():
     return counting_fn, counter
 
 
+class TestFunctionInspection(unittest.TestCase):
+    """Unit tests for function inspection"""
+
+    def sample_sync_method(self):
+        return 1
+
+    def test_sync_function(self):
+        def sample_sync_fn():
+            return 1
+
+        self.assertEqual(
+            once._wrapped_function_type(sample_sync_fn), once._WrappedFunctionType.SYNC_FUNCTION
+        )
+        self.assertEqual(
+            once._wrapped_function_type(TestFunctionInspection.sample_sync_method),
+            once._WrappedFunctionType.SYNC_FUNCTION,
+        )
+        self.assertEqual(
+            once._wrapped_function_type(lambda x: x + 1), once._WrappedFunctionType.SYNC_FUNCTION
+        )
+
+    async def sample_async_method(self):
+        return 1
+
+    def test_async_function(self):
+        async def sample_async_fn():
+            return 1
+
+        self.assertEqual(
+            once._wrapped_function_type(sample_async_fn), once._WrappedFunctionType.ASYNC_FUNCTION
+        )
+        self.assertEqual(
+            once._wrapped_function_type(TestFunctionInspection.sample_async_method),
+            once._WrappedFunctionType.ASYNC_FUNCTION,
+        )
+
+    def sample_sync_generator_method(self):
+        yield 1
+
+    def test_sync_generator_function(self):
+        def sample_sync_generator_fn():
+            yield 1
+
+        self.assertEqual(
+            once._wrapped_function_type(sample_sync_generator_fn),
+            once._WrappedFunctionType.SYNC_GENERATOR,
+        )
+        self.assertEqual(
+            once._wrapped_function_type(TestFunctionInspection.sample_sync_generator_method),
+            once._WrappedFunctionType.SYNC_GENERATOR,
+        )
+        # The output of a sync generator is not a wrappable.
+        self.assertEqual(
+            once._wrapped_function_type(sample_sync_generator_fn()),
+            once._WrappedFunctionType.UNSUPPORTED,
+        )
+
+    async def sample_async_generator_method(self):
+        yield 1
+
+    def test_sync_agenerator_function(self):
+        async def sample_async_generator_fn():
+            yield 1
+
+        self.assertEqual(
+            once._wrapped_function_type(sample_async_generator_fn),
+            once._WrappedFunctionType.ASYNC_GENERATOR,
+        )
+        self.assertEqual(
+            once._wrapped_function_type(TestFunctionInspection.sample_async_generator_method),
+            once._WrappedFunctionType.ASYNC_GENERATOR,
+        )
+        # The output of an async generator is not a wrappable.
+        self.assertEqual(
+            once._wrapped_function_type(sample_async_generator_fn()),
+            once._WrappedFunctionType.UNSUPPORTED,
+        )
+
+
 class TestOnce(unittest.TestCase):
     """Unit tests for once decorators."""
 
