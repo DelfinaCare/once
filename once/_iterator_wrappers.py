@@ -29,7 +29,7 @@ class AsyncGeneratorWrapper:
         self.generating = False
         self.lock = asyncio.Lock()
 
-    async def _yield_results(self) -> collections.abc.AsyncGenerator:
+    async def yield_results(self) -> collections.abc.AsyncGenerator:
         i = 0
         send = None
         next_val = None
@@ -106,7 +106,7 @@ class GeneratorWrapper:
         self.lock = threading.Lock()
         self.next_send = None
 
-    def _yield_results(self) -> collections.abc.Generator:
+    def yield_results(self) -> collections.abc.Generator:
         i = 0
         # Fast path for subsequent calls will not require a lock
         while True:

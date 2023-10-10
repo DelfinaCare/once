@@ -88,16 +88,16 @@ class _OnceBase(abc.ABC):
     # This cannot be an async function!
     def _execute_call_once_async_iter(self, func: collections.abc.Callable, *args, **kwargs):
         if self.called:
-            return self.return_value._yield_results()
+            return self.return_value.yield_results()
         with self.lock:
             if not self.called:
                 self.called = True
                 self.return_value = _iterator_wrappers.AsyncGeneratorWrapper(func, *args, **kwargs)
-        return self.return_value._yield_results()
+        return self.return_value.yield_results()
 
     def _sync_return(self):
         if self.fn_type == _WrappedFunctionType.SYNC_GENERATOR:
-            return self.return_value._yield_results().__iter__()
+            return self.return_value.yield_results().__iter__()
         else:
             return self.return_value
 
