@@ -154,19 +154,17 @@ class GeneratorWrapper:
                     if i == len(self.results) and not self.generating:
                         self.next_send = next_send
                 continue
-            if action == _IteratorAction.GENERATING:
-                assert self.generator is not None
-                try:
-                    result = self.generator.send(next_send)
-                except StopIteration:
-                    # This lock should be unnecessary, which by definition means there should be no
-                    # contention on it, so we use it to preserve our assumptions about variables which
-                    # are modified under lock.
-                    with self.lock:
-                        self.finished = True
-                        self.generator = None  # Allow this to be GCed.
-                        self.generating = False
-                else:
-                    with self.lock:
-                        self.generating = False
-                        self.results.append(result)
+            if action != _IteratorAction.GENERATING:
+                continue
+            assert self.generator is not None
+            try:
+                result = self.generator.send(next_send)
+            except StopIteration:
+                with self.lock:
+                    self.finished = True
+                    self.generator = None  # Allow this to be GCed.
+                    self.generating = False
+            else:
+                with self.lock:
+                    self.generating = False
+                    self.results.append(result)
