@@ -114,7 +114,6 @@ class GeneratorWrapper:
         self.results: list = []
         self.generating = False
         self.lock = threading.Lock()
-        self.next_send = None
 
     def yield_results(self) -> collections.abc.Generator:
         # Fast path for subsequent repeated call:
@@ -138,7 +137,6 @@ class GeneratorWrapper:
                         action = _IteratorAction.WAITING
                     else:
                         action = _IteratorAction.GENERATING
-                        next_send = self.next_send
                         self.generating = True
                 else:
                     action = _IteratorAction.YIELDING
@@ -148,11 +146,6 @@ class GeneratorWrapper:
             if action == _IteratorAction.YIELDING:
                 next_send = yield yield_value
                 i += 1
-                # If we have just sent the last element and we have not yet kicked off the next
-                # iteration, we need to record the next send value.
-                with self.lock:
-                    if i == len(self.results) and not self.generating:
-                        self.next_send = next_send
                 continue
             if action != _IteratorAction.GENERATING:
                 continue
