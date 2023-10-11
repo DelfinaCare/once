@@ -147,8 +147,7 @@ class GeneratorWrapper:
                 next_send = yield yield_value
                 i += 1
                 continue
-            if action != _IteratorAction.GENERATING:
-                continue
+            assert action == _IteratorAction.GENERATING
             assert self.generator is not None
             try:
                 result = self.generator.send(next_send)

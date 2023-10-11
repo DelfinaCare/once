@@ -513,6 +513,8 @@ class TestOnce(unittest.TestCase):
                 result.append(gen.send(i))
             return result
 
+        # Unlike the previous test, each execution should yield lists of different lengths.
+        # This ensures that the iterator does not hang, even if not exhausted
         with concurrent.futures.ThreadPoolExecutor(max_workers=16) as executor:
             results = list(executor.map(call_iterator, range(1, 32)))
         for i, result in enumerate(results):
