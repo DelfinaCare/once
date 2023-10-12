@@ -66,8 +66,14 @@ class _OnceBase:
         if self.fn_type == _WrappedFunctionType.ASYNC_GENERATOR:
 
             async def wrapped(*args, **kwargs):
+                async with self.async_lock:
+                    if not self.called:
+                        self.return_value = _iterator_wrappers.AsyncGeneratorWrapper(
+                            func, *args, **kwargs
+                        )
+                        self.called = True
                 next_value = None
-                iterator = self._execute_call_once_async_iter(func, *args, **kwargs)
+                iterator = self.return_value.yield_results()
                 while True:
                     try:
                         next_value = yield await iterator.asend(next_value)
@@ -77,56 +83,34 @@ class _OnceBase:
         elif self.fn_type == _WrappedFunctionType.ASYNC_FUNCTION:
 
             async def wrapped(*args, **kwargs):
-                return await self._execute_call_once_async(func, *args, **kwargs)
+                async with self.async_lock:
+                    if not self.called:
+                        self.return_value = await func(*args, **kwargs)
+                        self.called = True
+                    return self.return_value
 
         elif self.fn_type == _WrappedFunctionType.SYNC_FUNCTION:
 
             def wrapped(*args, **kwargs):
-                return self._execute_call_once_sync(func, *args, **kwargs)
+                with self.lock:
+                    if not self.called:
+                        self.return_value = func(*args, **kwargs)
+                        self.called = True
+                    return self.return_value
 
         else:
             assert self.fn_type == _WrappedFunctionType.SYNC_GENERATOR
 
             def wrapped(*args, **kwargs):
-                yield from self._execute_call_once_sync_iter(func, *args, **kwargs)
+                with self.lock:
+                    if not self.called:
+                        self.return_value = _iterator_wrappers.GeneratorWrapper(func, *args, **kwargs)
+                        self.called = True
+                    iterator = self.return_value
+                yield from iterator.yield_results()
 
         functools.update_wrapper(wrapped, func)
         return wrapped
-
-    async def _execute_call_once_async(self, func: collections.abc.Callable, *args, **kwargs):
-        async with self.async_lock:
-            if not self.called:
-                self.return_value = await func(*args, **kwargs)
-                self.called = True
-            return self.return_value
-
-    async def _execute_call_once_async_iter(self, func: collections.abc.Callable, *args, **kwargs):
-        async with self.async_lock:
-            if not self.called:
-                self.return_value = _iterator_wrappers.AsyncGeneratorWrapper(func, *args, **kwargs)
-                self.called = True
-        next_value = None
-        iterator = self.return_value.yield_results()
-        while True:
-            try:
-                next_value = yield await iterator.asend(next_value)
-            except StopAsyncIteration:
-                return
-
-    def _execute_call_once_sync(self, func: collections.abc.Callable, *args, **kwargs):
-        with self.lock:
-            if not self.called:
-                self.return_value = func(*args, **kwargs)
-                self.called = True
-            return self.return_value
-
-    def _execute_call_once_sync_iter(self, func: collections.abc.Callable, *args, **kwargs):
-        with self.lock:
-            if not self.called:
-                self.return_value = _iterator_wrappers.GeneratorWrapper(func, *args, **kwargs)
-                self.called = True
-            iterator = self.return_value
-        yield from iterator.yield_results()
 
 
 def once(func: collections.abc.Callable):
