@@ -104,7 +104,9 @@ class _OnceBase:
             def wrapped(*args, **kwargs):
                 with self.lock:
                     if not self.called:
-                        self.return_value = _iterator_wrappers.GeneratorWrapper(func, *args, **kwargs)
+                        self.return_value = _iterator_wrappers.GeneratorWrapper(
+                            func, *args, **kwargs
+                        )
                         self.called = True
                     iterator = self.return_value
                 yield from iterator.yield_results()

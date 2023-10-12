@@ -145,6 +145,7 @@ class GeneratorWrapper:
                     action = _IteratorAction.YIELDING
                     yield_value = self.results[i]
             if action == _IteratorAction.WAITING:
+                # Indicate to python that it should switch to another thread, so we do not hog the GIL.
                 time.sleep(0)
                 continue
             if action == _IteratorAction.YIELDING:
@@ -164,6 +165,8 @@ class GeneratorWrapper:
                 with self.lock:
                     self.finished = True
                     self.generating = False
+                    # We need to keep track of the exception so that we can raise it in the same
+                    # position every time the iterator is called.
                     self.exception = e
                     self.generator = None  # Allow this to be GCed.
             else:
