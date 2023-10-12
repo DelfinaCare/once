@@ -4,7 +4,6 @@ import collections.abc
 import enum
 import functools
 import inspect
-import time
 import threading
 import typing
 import weakref
@@ -46,15 +45,9 @@ def _wrapped_function_type(func: collections.abc.Callable) -> _WrappedFunctionTy
     raise SyntaxError(f"Unable to determine function type for {repr(original_func)}")
 
 
-class _ExecutionState(enum.Enum):
-    UNCALLED = 0
-    WAITING = 1
-    COMPLETED = 2
-
-
 class _OnceBase:
     def __init__(self, fn_type: _WrappedFunctionType) -> None:
-        self.call_state = _ExecutionState.UNCALLED
+        self.called = False
         self.return_value: typing.Any = None
         self.fn_type = fn_type
         if (
@@ -102,33 +95,16 @@ class _OnceBase:
 
     async def _execute_call_once_async(self, func: collections.abc.Callable, *args, **kwargs):
         async with self.async_lock:
-            call_state = self.call_state
-        while call_state != _ExecutionState.COMPLETED:
-            if call_state == _ExecutionState.WAITING:
-                # Allow another thread to grab the GIL.
-                await asyncio.sleep(0)
-            async with self.async_lock:
-                call_state = self.call_state
-                if call_state == _ExecutionState.UNCALLED:
-                    self.call_state = _ExecutionState.WAITING
-            # Only one thread will be allowed into this state.
-            if call_state == _ExecutionState.UNCALLED:
-                try:
-                    return_value = await func(*args, **kwargs)
-                except Exception as exc:
-                    async with self.async_lock:
-                        self.call_state = _ExecutionState.UNCALLED
-                    raise exc
-                async with self.async_lock:
-                    self.return_value = return_value
-                    self.call_state = _ExecutionState.COMPLETED
-        return self.return_value
+            if not self.called:
+                self.return_value = await func(*args, **kwargs)
+                self.called = True
+            return self.return_value
 
     async def _execute_call_once_async_iter(self, func: collections.abc.Callable, *args, **kwargs):
         async with self.async_lock:
-            if self.call_state == _ExecutionState.UNCALLED:
+            if not self.called:
                 self.return_value = _iterator_wrappers.AsyncGeneratorWrapper(func, *args, **kwargs)
-                self.call_state = _ExecutionState.COMPLETED
+                self.called = True
         next_value = None
         iterator = self.return_value.yield_results()
         while True:
@@ -139,36 +115,18 @@ class _OnceBase:
 
     def _execute_call_once_sync(self, func: collections.abc.Callable, *args, **kwargs):
         with self.lock:
-            call_state = self.call_state
-        while call_state != _ExecutionState.COMPLETED:
-            # We only hit this state in multi-threded code. To reduce contention, we invoke
-            # time.sleep so another thread an pick up the GIL.
-            if call_state == _ExecutionState.WAITING:
-                time.sleep(0)
-            with self.lock:
-                call_state = self.call_state
-                if call_state == _ExecutionState.UNCALLED:
-                    self.call_state = _ExecutionState.WAITING
-            # Only one thread will be allowed into this state.
-            if call_state == _ExecutionState.UNCALLED:
-                try:
-                    return_value = func(*args, **kwargs)
-                except Exception as exc:
-                    with self.lock:
-                        self.call_state = _ExecutionState.UNCALLED
-                    raise exc
-                else:
-                    with self.lock:
-                        self.return_value = return_value
-                        self.call_state = _ExecutionState.COMPLETED
-        return self.return_value
+            if not self.called:
+                self.return_value = func(*args, **kwargs)
+                self.called = True
+            return self.return_value
 
     def _execute_call_once_sync_iter(self, func: collections.abc.Callable, *args, **kwargs):
         with self.lock:
-            if self.call_state == _ExecutionState.UNCALLED:
+            if not self.called:
                 self.return_value = _iterator_wrappers.GeneratorWrapper(func, *args, **kwargs)
-                self.call_state = _ExecutionState.COMPLETED
-        yield from self.return_value.yield_results()
+                self.called = True
+            iterator = self.return_value
+        yield from iterator.yield_results()
 
 
 def once(func: collections.abc.Callable):
