@@ -181,10 +181,8 @@ class TestFunctionInspection(unittest.TestCase):
             once._WrappedFunctionType.SYNC_GENERATOR,
         )
         # The output of a sync generator is not a wrappable.
-        self.assertEqual(
-            once._wrapped_function_type(sample_sync_generator_fn(1, 2)),
-            once._WrappedFunctionType.UNSUPPORTED,
-        )
+        with self.assertRaises(SyntaxError):
+            once._wrapped_function_type(sample_sync_generator_fn(1, 2))
 
     async def sample_async_generator_method(self, _):
         yield 1
@@ -224,10 +222,8 @@ class TestFunctionInspection(unittest.TestCase):
             once._WrappedFunctionType.ASYNC_GENERATOR,
         )
         # The output of an async generator is not a wrappable.
-        self.assertEqual(
-            once._wrapped_function_type(sample_async_generator_fn(1, 2)),
-            once._WrappedFunctionType.UNSUPPORTED,
-        )
+        with self.assertRaises(SyntaxError):
+            once._wrapped_function_type(sample_async_generator_fn(1, 2))
 
 
 class TestOnce(unittest.TestCase):
