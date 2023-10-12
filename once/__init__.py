@@ -5,15 +5,12 @@ import collections.abc
 import enum
 import functools
 import inspect
+import time
 import threading
 import typing
 import weakref
 
 from . import _iterator_wrappers
-
-
-def _new_lock() -> threading.Lock:
-    return threading.Lock()
 
 
 def _is_method(func: collections.abc.Callable):
@@ -36,16 +33,25 @@ def _wrapped_function_type(func: collections.abc.Callable) -> _WrappedFunctionTy
     # The function inspect.isawaitable is a bit of a misnomer - it refers
     # to the awaitable result of an async function, not the async function
     # itself.
+    while isinstance(func, functools.partial):
+        # Work around inspect not functioning properly in python < 3.10 for partial functions.
+        func = func.func
     if inspect.isasyncgenfunction(func):
         return _WrappedFunctionType.ASYNC_GENERATOR
     if inspect.isgeneratorfunction(func):
         return _WrappedFunctionType.SYNC_GENERATOR
     if inspect.iscoroutinefunction(func):
         return _WrappedFunctionType.ASYNC_FUNCTION
-    # This must come last, because it would return True for all the other types
-    if inspect.isfunction(func):
-        return _WrappedFunctionType.SYNC_FUNCTION
-    return _WrappedFunctionType.UNSUPPORTED
+    # We assume it is a callable sync function if it is callable.
+    if not callable(func):
+        return _WrappedFunctionType.UNSUPPORTED
+    return _WrappedFunctionType.SYNC_FUNCTION
+
+
+class _ExecutionState(enum.Enum):
+    UNCALLED = 0
+    WAITING = 1
+    COMPLETED = 2
 
 
 class _OnceBase(abc.ABC):
@@ -54,15 +60,18 @@ class _OnceBase(abc.ABC):
     def __init__(self, func: collections.abc.Callable) -> None:
         functools.update_wrapper(self, func)
         self.func = self._inspect_function(func)
-        self.called = False
+        self.call_state = _ExecutionState.UNCALLED
         self.return_value: typing.Any = None
         self.fn_type = _wrapped_function_type(self.func)
         if self.fn_type == _WrappedFunctionType.UNSUPPORTED:
             raise SyntaxError(f"Unable to wrap a {type(func)}")
-        if self.fn_type == _WrappedFunctionType.ASYNC_FUNCTION:
+        if (
+            self.fn_type == _WrappedFunctionType.ASYNC_FUNCTION
+            or self.fn_type == _WrappedFunctionType.ASYNC_GENERATOR
+        ):
             self.async_lock = asyncio.Lock()
         else:
-            self.lock = _new_lock()
+            self.lock = threading.Lock()
 
     @abc.abstractmethod
     def _inspect_function(self, func: collections.abc.Callable) -> collections.abc.Callable:
@@ -74,61 +83,129 @@ class _OnceBase(abc.ABC):
         It should return the function which should be executed once.
         """
 
-    async def _execute_call_once_async(self, func: collections.abc.Callable, *args, **kwargs):
-        if self.called:
-            return self.return_value
-        async with self.async_lock:
-            if self.called:
-                return self.return_value
-            else:
-                self.return_value = await func(*args, **kwargs)
-            self.called = True
-            return self.return_value
+    def _callable(self, func: collections.abc.Callable):
+        """Generate a wrapped function appropriate to the function type.
 
-    # This cannot be an async function!
-    def _execute_call_once_async_iter(self, func: collections.abc.Callable, *args, **kwargs):
-        if self.called:
-            return self.return_value.yield_results()
-        with self.lock:
-            if not self.called:
-                self.called = True
-                self.return_value = _iterator_wrappers.AsyncGeneratorWrapper(func, *args, **kwargs)
-        return self.return_value.yield_results()
+        This wrapped function will call the correct _execute_call_once function.
+        """
+        if self.fn_type == _WrappedFunctionType.ASYNC_GENERATOR:
 
-    def _sync_return(self):
-        if self.fn_type == _WrappedFunctionType.SYNC_GENERATOR:
-            return self.return_value.yield_results().__iter__()
+            async def wrapped(*args, **kwargs):
+                next_value = None
+                iterator = self._execute_call_once_async_iter(func, *args, **kwargs)
+                while True:
+                    try:
+                        next_value = yield await iterator.asend(next_value)
+                    except StopAsyncIteration:
+                        return
+
+        elif self.fn_type == _WrappedFunctionType.ASYNC_FUNCTION:
+
+            async def wrapped(*args, **kwargs):
+                return await self._execute_call_once_async(func, *args, **kwargs)
+
+        elif self.fn_type == _WrappedFunctionType.SYNC_FUNCTION:
+
+            def wrapped(*args, **kwargs):
+                return self._execute_call_once_sync(func, *args, **kwargs)
+
         else:
-            return self.return_value
+            assert self.fn_type == _WrappedFunctionType.SYNC_GENERATOR
+
+            def wrapped(*args, **kwargs):
+                yield from self._execute_call_once_sync_iter(func, *args, **kwargs)
+
+        functools.update_wrapper(wrapped, func)
+        return wrapped
+
+    async def _execute_call_once_async(self, func: collections.abc.Callable, *args, **kwargs):
+        async with self.async_lock:
+            call_state = self.call_state
+        while call_state != _ExecutionState.COMPLETED:
+            if call_state == _ExecutionState.WAITING:
+                # Allow another thread to grab the GIL.
+                await asyncio.sleep(0)
+            async with self.async_lock:
+                call_state = self.call_state
+                if call_state == _ExecutionState.UNCALLED:
+                    self.call_state = _ExecutionState.WAITING
+            # Only one thread will be allowed into this state.
+            if call_state == _ExecutionState.UNCALLED:
+                try:
+                    return_value = await func(*args, **kwargs)
+                except Exception as exc:
+                    async with self.async_lock:
+                        self.call_state = _ExecutionState.UNCALLED
+                    raise exc
+                async with self.async_lock:
+                    self.return_value = return_value
+                    self.call_state = _ExecutionState.COMPLETED
+        return self.return_value
+
+    async def _execute_call_once_async_iter(self, func: collections.abc.Callable, *args, **kwargs):
+        async with self.async_lock:
+            if self.call_state == _ExecutionState.UNCALLED:
+                self.return_value = _iterator_wrappers.AsyncGeneratorWrapper(func, *args, **kwargs)
+                self.call_state = _ExecutionState.COMPLETED
+        next_value = None
+        iterator = self.return_value.yield_results()
+        while True:
+            try:
+                next_value = yield await iterator.asend(next_value)
+            except StopAsyncIteration:
+                return
 
     def _execute_call_once_sync(self, func: collections.abc.Callable, *args, **kwargs):
-        if self.called:
-            return self._sync_return()
         with self.lock:
-            if self.called:
-                return self._sync_return()
-            if self.fn_type == _WrappedFunctionType.SYNC_GENERATOR:
+            call_state = self.call_state
+        while call_state != _ExecutionState.COMPLETED:
+            # We only hit this state in multi-threded code. To reduce contention, we invoke
+            # time.sleep so another thread an pick up the GIL.
+            if call_state == _ExecutionState.WAITING:
+                time.sleep(0)
+            with self.lock:
+                call_state = self.call_state
+                if call_state == _ExecutionState.UNCALLED:
+                    self.call_state = _ExecutionState.WAITING
+            # Only one thread will be allowed into this state.
+            if call_state == _ExecutionState.UNCALLED:
+                try:
+                    return_value = func(*args, **kwargs)
+                except Exception as exc:
+                    with self.lock:
+                        self.call_state = _ExecutionState.UNCALLED
+                    raise exc
+                else:
+                    with self.lock:
+                        self.return_value = return_value
+                        self.call_state = _ExecutionState.COMPLETED
+        return self.return_value
+
+    def _execute_call_once_sync_iter(self, func: collections.abc.Callable, *args, **kwargs):
+        with self.lock:
+            if self.call_state == _ExecutionState.UNCALLED:
                 self.return_value = _iterator_wrappers.GeneratorWrapper(func, *args, **kwargs)
-            else:
-                self.return_value = func(*args, **kwargs)
-            self.called = True
-            return self._sync_return()
-
-    def _execute_call_once(self, func: collections.abc.Callable, *args, **kwargs):
-        """Choose the appropriate call_once based on the function type."""
-        if self.fn_type == _WrappedFunctionType.ASYNC_GENERATOR:
-            return self._execute_call_once_async_iter(func, *args, **kwargs)
-        if self.fn_type == _WrappedFunctionType.ASYNC_FUNCTION:
-            return self._execute_call_once_async(func, *args, **kwargs)
-        return self._execute_call_once_sync(func, *args, **kwargs)
+                self.call_state = _ExecutionState.COMPLETED
+        yield from self.return_value.yield_results()
 
 
-class once(_OnceBase):  # pylint: disable=invalid-name
+class _OnceFn(_OnceBase):
+    def _inspect_function(self, func: collections.abc.Callable):
+        if _is_method(func):
+            raise SyntaxError(
+                "Attempting to use @once.once decorator on method "
+                "instead of @once.once_per_class or @once.once_per_instance"
+            )
+        return func
+
+
+def once(func: collections.abc.Callable):
     """Decorator to ensure a function is only called once.
 
     The restriction of only one call also holds across threads. However, this
     restriction does not apply to unsuccessful function calls. If the function
-    raises an exception, the next call will invoke a new call to the function.
+    raises an exception, the next call will invoke a new call to the function,
+    unless it is in iterator, in which case the failure will be cached.
     If the function is called with multiple arguments, it will still only be
     called only once.
 
@@ -141,17 +218,8 @@ class once(_OnceBase):  # pylint: disable=invalid-name
     module and class level functions (i.e. non-closures), this means the return
     value will never be deleted.
     """
-
-    def _inspect_function(self, func: collections.abc.Callable):
-        if _is_method(func):
-            raise SyntaxError(
-                "Attempting to use @once.once decorator on method "
-                "instead of @once.once_per_class or @once.once_per_instance"
-            )
-        return func
-
-    def __call__(self, *args, **kwargs):
-        return self._execute_call_once(self.func, *args, **kwargs)
+    once_obj = _OnceFn(func)
+    return once_obj._callable(func)
 
 
 class once_per_class(_OnceBase):  # pylint: disable=invalid-name
@@ -182,11 +250,10 @@ class once_per_class(_OnceBase):  # pylint: disable=invalid-name
     # bound version of the function to the object or class.
     def __get__(self, obj, cls):
         if self.is_classmethod:
-            func = functools.partial(self.func, cls)
-            return functools.partial(self._execute_call_once, func)
+            return self._callable(functools.partial(self.func, cls))
         if self.is_staticmethod:
-            return functools.partial(self._execute_call_once, self.func)
-        return functools.partial(self._execute_call_once, self.func, obj)
+            return self._callable(self.func)
+        return self._callable(functools.partial(self.func, obj))
 
 
 class once_per_instance(_OnceBase):  # pylint: disable=invalid-name
@@ -233,7 +300,7 @@ class once_per_instance(_OnceBase):  # pylint: disable=invalid-name
             if obj in self.inflight_lock:
                 inflight_lock = self.inflight_lock[obj]
             else:
-                inflight_lock = _new_lock()
+                inflight_lock = threading.Lock()
                 self.inflight_lock[obj] = inflight_lock
         # Now we have a per-object lock. This means that we will not block
         # other instances. In addition to better performance, this reduces the

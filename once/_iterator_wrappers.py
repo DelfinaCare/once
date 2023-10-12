@@ -2,6 +2,7 @@ import asyncio
 import collections.abc
 import enum
 import threading
+import time
 
 # Before we begin, a note on the assert statements in this file:
 # Why are we using assert in here, you might ask, instead of implementing "proper" error handling?
@@ -114,24 +115,26 @@ class GeneratorWrapper:
         self.results: list = []
         self.generating = False
         self.lock = threading.Lock()
+        self.exception: Exception | None = None
 
     def yield_results(self) -> collections.abc.Generator:
         # Fast path for subsequent repeated call:
         with self.lock:
-            finished = self.finished
-        if finished:
+            fast_path = self.finished and self.exception is None
+        if fast_path:
             yield from self.results
             return
         i = 0
         yield_value = None
         next_send = None
-        # Fast path for subsequent calls will not require a lock
         while True:
             action: _IteratorAction | None = None
             # With a lock, we figure out which action to take, and then we take it after release.
             with self.lock:
                 if i == len(self.results):
                     if self.finished:
+                        if self.exception:
+                            raise self.exception
                         return
                     if self.generating:
                         action = _IteratorAction.WAITING
@@ -142,6 +145,7 @@ class GeneratorWrapper:
                     action = _IteratorAction.YIELDING
                     yield_value = self.results[i]
             if action == _IteratorAction.WAITING:
+                time.sleep(0)
                 continue
             if action == _IteratorAction.YIELDING:
                 next_send = yield yield_value
@@ -154,8 +158,14 @@ class GeneratorWrapper:
             except StopIteration:
                 with self.lock:
                     self.finished = True
-                    self.generator = None  # Allow this to be GCed.
                     self.generating = False
+                    self.generator = None  # Allow this to be GCed.
+            except Exception as e:
+                with self.lock:
+                    self.finished = True
+                    self.generating = False
+                    self.exception = e
+                    self.generator = None  # Allow this to be GCed.
             else:
                 with self.lock:
                     self.generating = False
