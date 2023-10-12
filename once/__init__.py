@@ -188,6 +188,8 @@ class once_per_instance(_OnceBase):  # pylint: disable=invalid-name
         self.func = self._inspect_function(func)
         super().__init__(_wrapped_function_type(self.func))
         self.callables_lock = threading.Lock()
+        # The keys here are objects which are instances of the class on which the method is
+        # defined.
         self.callables: weakref.WeakKeyDictionary[
             typing.Any, collections.abc.Callable
         ] = weakref.WeakKeyDictionary()
