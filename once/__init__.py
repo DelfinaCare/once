@@ -98,8 +98,7 @@ class _OnceBase:
                         self.called = True
                     return self.return_value
 
-        else:
-            assert self.fn_type == _WrappedFunctionType.SYNC_GENERATOR
+        elif self.fn_type == _WrappedFunctionType.SYNC_GENERATOR:
 
             def wrapped(*args, **kwargs):
                 with self.lock:
@@ -110,6 +109,9 @@ class _OnceBase:
                         self.called = True
                     iterator = self.return_value
                 yield from iterator.yield_results()
+
+        else:
+            raise NotImplementedError()
 
         functools.update_wrapper(wrapped, func)
         return wrapped
