@@ -56,6 +56,85 @@ def generate_once_counter_fn():
     return counting_fn, counter
 
 
+class TestFunctionInspection(unittest.TestCase):
+    """Unit tests for function inspection"""
+
+    def sample_sync_method(self):
+        return 1
+
+    def test_sync_function(self):
+        def sample_sync_fn():
+            return 1
+
+        self.assertEqual(
+            once._wrapped_function_type(sample_sync_fn), once._WrappedFunctionType.SYNC_FUNCTION
+        )
+        self.assertEqual(
+            once._wrapped_function_type(TestFunctionInspection.sample_sync_method),
+            once._WrappedFunctionType.SYNC_FUNCTION,
+        )
+        self.assertEqual(
+            once._wrapped_function_type(lambda x: x + 1), once._WrappedFunctionType.SYNC_FUNCTION
+        )
+
+    async def sample_async_method(self):
+        return 1
+
+    def test_async_function(self):
+        async def sample_async_fn():
+            return 1
+
+        self.assertEqual(
+            once._wrapped_function_type(sample_async_fn), once._WrappedFunctionType.ASYNC_FUNCTION
+        )
+        self.assertEqual(
+            once._wrapped_function_type(TestFunctionInspection.sample_async_method),
+            once._WrappedFunctionType.ASYNC_FUNCTION,
+        )
+
+    def sample_sync_generator_method(self):
+        yield 1
+
+    def test_sync_generator_function(self):
+        def sample_sync_generator_fn():
+            yield 1
+
+        self.assertEqual(
+            once._wrapped_function_type(sample_sync_generator_fn),
+            once._WrappedFunctionType.SYNC_GENERATOR,
+        )
+        self.assertEqual(
+            once._wrapped_function_type(TestFunctionInspection.sample_sync_generator_method),
+            once._WrappedFunctionType.SYNC_GENERATOR,
+        )
+        # The output of a sync generator is not a wrappable.
+        self.assertEqual(
+            once._wrapped_function_type(sample_sync_generator_fn()),
+            once._WrappedFunctionType.UNSUPPORTED,
+        )
+
+    async def sample_async_generator_method(self):
+        yield 1
+
+    def test_sync_agenerator_function(self):
+        async def sample_async_generator_fn():
+            yield 1
+
+        self.assertEqual(
+            once._wrapped_function_type(sample_async_generator_fn),
+            once._WrappedFunctionType.ASYNC_GENERATOR,
+        )
+        self.assertEqual(
+            once._wrapped_function_type(TestFunctionInspection.sample_async_generator_method),
+            once._WrappedFunctionType.ASYNC_GENERATOR,
+        )
+        # The output of an async generator is not a wrappable.
+        self.assertEqual(
+            once._wrapped_function_type(sample_async_generator_fn()),
+            once._WrappedFunctionType.UNSUPPORTED,
+        )
+
+
 class TestOnce(unittest.TestCase):
     """Unit tests for once decorators."""
 
@@ -77,13 +156,30 @@ class TestOnce(unittest.TestCase):
         self.assertEqual(counter.value, 1)
 
     def test_iterator(self):
+        counter = Counter()
+
         @once.once
         def yielding_iterator():
-            for i in range(3):
-                yield i
+            nonlocal counter
+            for _ in range(3):
+                yield counter.get_incremented()
 
-        self.assertEqual(list(yielding_iterator()), [0, 1, 2])
-        self.assertEqual(list(yielding_iterator()), [0, 1, 2])
+        self.assertEqual(list(yielding_iterator()), [1, 2, 3])
+        self.assertEqual(list(yielding_iterator()), [1, 2, 3])
+
+    def test_iterator_parallel_execution(self):
+        counter = Counter()
+
+        @once.once
+        def yielding_iterator():
+            nonlocal counter
+            for _ in range(3):
+                yield counter.get_incremented()
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=16) as executor:
+            results = list(executor.map(lambda _: list(yielding_iterator()), range(32)))
+        for result in results:
+            self.assertEqual(result, [1, 2, 3])
 
     def test_threaded_single_function(self):
         counting_fn, counter = generate_once_counter_fn()
@@ -360,6 +456,70 @@ class TestOnce(unittest.TestCase):
         self.assertEqual(_CallOnceClass.value(), 1)
         self.assertEqual(_CallOnceClass.value(), 1)
 
+    def test_receiving_iterator(self):
+        @once.once
+        def receiving_iterator():
+            next = yield 0
+            while next is not None:
+                next = yield next
+
+        gen_1 = receiving_iterator()
+        gen_2 = receiving_iterator()
+        self.assertEqual(gen_1.send(None), 0)
+        self.assertEqual(gen_1.send(1), 1)
+        self.assertEqual(gen_1.send(2), 2)
+        self.assertEqual(gen_2.send(None), 0)
+        self.assertEqual(gen_2.send(-1), 1)
+        self.assertEqual(gen_2.send(-1), 2)
+        self.assertEqual(gen_2.send(5), 5)
+        self.assertEqual(next(gen_2, None), None)
+        self.assertEqual(gen_1.send(None), 5)
+        self.assertEqual(next(gen_1, None), None)
+        self.assertEqual(list(receiving_iterator()), [0, 1, 2, 5])
+
+    def test_receiving_iterator_parallel_execution(self):
+        @once.once
+        def receiving_iterator():
+            next = yield 0
+            while next is not None:
+                next = yield next
+
+        def call_iterator(_):
+            gen = receiving_iterator()
+            result = []
+            result.append(gen.send(None))
+            for i in range(1, 32):
+                result.append(gen.send(i))
+            return result
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=16) as executor:
+            results = list(executor.map(call_iterator, range(32)))
+        for result in results:
+            self.assertEqual(result, list(range(32)))
+
+    def test_receiving_iterator_parallel_execution_halting(self):
+        @once.once
+        def receiving_iterator():
+            next = yield 0
+            while next is not None:
+                next = yield next
+
+        def call_iterator(n):
+            """Call the iterator but end early"""
+            gen = receiving_iterator()
+            result = []
+            result.append(gen.send(None))
+            for i in range(1, n):
+                result.append(gen.send(i))
+            return result
+
+        # Unlike the previous test, each execution should yield lists of different lengths.
+        # This ensures that the iterator does not hang, even if not exhausted
+        with concurrent.futures.ThreadPoolExecutor(max_workers=16) as executor:
+            results = list(executor.map(call_iterator, range(1, 32)))
+        for i, result in enumerate(results):
+            self.assertEqual(result, list(range(i + 1)))
+
 
 class TestOnceAsync(unittest.IsolatedAsyncioTestCase):
     async def test_fn_called_once(self):
@@ -458,22 +618,23 @@ class TestOnceAsync(unittest.IsolatedAsyncioTestCase):
     async def test_receiving_iterator(self):
         @once.once
         async def async_receiving_iterator():
-            next = yield 1
+            next = yield 0
             while next is not None:
                 next = yield next
 
         gen_1 = async_receiving_iterator()
         gen_2 = async_receiving_iterator()
-        self.assertEqual(await gen_1.asend(None), 1)
+        self.assertEqual(await gen_1.asend(None), 0)
         self.assertEqual(await gen_1.asend(1), 1)
-        self.assertEqual(await gen_1.asend(3), 3)
+        self.assertEqual(await gen_1.asend(2), 2)
+        self.assertEqual(await gen_2.asend(None), 0)
         self.assertEqual(await gen_2.asend(None), 1)
-        self.assertEqual(await gen_2.asend(None), 1)
-        self.assertEqual(await gen_2.asend(None), 3)
+        self.assertEqual(await gen_2.asend(None), 2)
         self.assertEqual(await gen_2.asend(5), 5)
         self.assertEqual(await anext(gen_2, None), None)
         self.assertEqual(await gen_1.asend(None), 5)
         self.assertEqual(await anext(gen_1, None), None)
+        self.assertEqual([i async for i in async_receiving_iterator()], [0, 1, 2, 5])
 
     @unittest.skipIf(not hasattr(asyncio, "Barrier"), "Requires Barrier to evaluate")
     async def test_iterator_lock_not_held_during_evaluation(self):
