@@ -296,14 +296,30 @@ class TestOnce(unittest.TestCase):
         @once.once
         def sample_failing_fn():
             yield counter.get_incremented()
-            raise ValueError("expected failure")
+            result = counter.get_incremented()
+            yield result
+            if result == 2:
+                raise ValueError("expected failure after 2.")
 
+        # Both of these calls should return the same results.
+        call1 = sample_failing_fn()
+        call2 = sample_failing_fn()
+        self.assertEqual(next(call1), 1)
+        self.assertEqual(next(call2), 1)
+        self.assertEqual(next(call1), 2)
+        self.assertEqual(next(call2), 2)
         with self.assertRaises(ValueError):
-            list(sample_failing_fn())
+            next(call1)
         with self.assertRaises(ValueError):
-            list(sample_failing_fn())
-        self.assertEqual(next(sample_failing_fn()), 1)
-        self.assertEqual(next(sample_failing_fn()), 1)
+            next(call2)
+        # These next 2 calls should succeed.
+        call3 = sample_failing_fn()
+        call4 = sample_failing_fn()
+        self.assertEqual(list(call3), [3, 4])
+        self.assertEqual(list(call4), [3, 4])
+        # Subsequent calls should return the original value.
+        self.assertEqual(list(sample_failing_fn()), [3, 4])
+        self.assertEqual(list(sample_failing_fn()), [3, 4])
 
     def test_iterator_parallel_execution(self):
         counter = Counter()

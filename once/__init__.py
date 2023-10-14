@@ -123,9 +123,12 @@ def once(func: collections.abc.Callable):
     The restriction of only one call also holds across threads. However, this
     restriction does not apply to unsuccessful function calls. If the function
     raises an exception, the next call will invoke a new call to the function,
-    unless it is in iterator, in which case the failure will be cached.
-    If the function is called with multiple arguments, it will still only be
-    called only once.
+    unless it is a generator, in which case new iterators will invoke a new
+    call to the function, but existing iterators will continue and all raise
+    the same cached value.
+
+    Caching is **not** argument aware, and a subsequent call with different
+    arguments after a function all will not result in a new call.
 
     This decorator will fail for methods defined on a class. Use
     once_per_class or once_per_instance for methods on a class instead.
