@@ -6,6 +6,7 @@ import functools
 import gc
 import inspect
 import sys
+import threading
 import time
 import unittest
 import weakref
@@ -48,6 +49,31 @@ class Counter:
             pass
         self.value += 1
         return self.value
+
+
+def execute_with_barrier(*args, n_workers=None):
+    """Decorator to ensure function calls do not begin until at least n_workers have started.
+
+    This ensures that our parallel tests actually test concurrency. Without this, it is possible
+    that function calls execute as they are being scheduled, and do not truly execute in parallel.
+    """
+    # Trick to make the decorator accept an arugment. The first call only gets the n_workers
+    # parameter, and then returns a new function with it set that then accepts the function.
+    if n_workers is None:
+        raise ValueError("n_workers not set")
+    if len(args) == 0:
+        return functools.partial(execute_with_barrier, n_workers=n_workers)
+    if len(args) > 1:
+        raise ValueError("Up to one argument expected.")
+    func = args[0]
+    barrier = threading.Barrier(n_workers)
+
+    def wrapped(*args, **kwargs):
+        barrier.wait()
+        return func(*args, **kwargs)
+
+    functools.update_wrapper(wrapped, func)
+    return wrapped
 
 
 def generate_once_counter_fn():
@@ -323,8 +349,8 @@ class TestOnce(unittest.TestCase):
 
     def test_iterator_parallel_execution(self):
         counter = Counter()
-        counter.paused = True
 
+        @execute_with_barrier(n_workers=_N_WORKERS)
         @once.once
         def yielding_iterator():
             nonlocal counter
@@ -363,12 +389,11 @@ class TestOnce(unittest.TestCase):
 
     def test_threaded_single_function(self):
         counting_fn, counter = generate_once_counter_fn()
-        counter.paused = True
+        barrier_counting_fn = execute_with_barrier(counting_fn, n_workers=_N_WORKERS)
         with concurrent.futures.ThreadPoolExecutor(max_workers=_N_WORKERS) as executor:
-            results_generator = executor.map(counting_fn, range(_N_WORKERS * 2))
-            counter.paused = False  # starter pistol, the race is off!
+            results_generator = executor.map(barrier_counting_fn, range(_N_WORKERS))
             results = list(results_generator)
-        self.assertEqual(len(results), _N_WORKERS * 2)
+        self.assertEqual(len(results), _N_WORKERS)
         for r in results:
             self.assertEqual(r, 1)
         self.assertEqual(counter.value, 1)
@@ -379,17 +404,14 @@ class TestOnce(unittest.TestCase):
 
         for _ in range(4):
             cfn, counter = generate_once_counter_fn()
-            counter.paused = True
             counters.append(counter)
-            fns.append(cfn)
+            fns.append(execute_with_barrier(cfn, n_workers=_N_WORKERS))
 
         promises = []
         with concurrent.futures.ThreadPoolExecutor(max_workers=_N_WORKERS) as executor:
             for cfn in fns:
                 for _ in range(_N_WORKERS):
                     promises.append(executor.submit(cfn))
-            for counter in counters:
-                counter.paused = False
             del cfn
             fns.clear()
             for promise in promises:
@@ -623,51 +645,42 @@ class TestOnce(unittest.TestCase):
         self.assertEqual(list(receiving_iterator()), [0, 1, 2, 5])
 
     def test_receiving_iterator_parallel_execution(self):
-        # Pause so we actually are able to test parallel execution, by ensuring that each exec
-        # does not complete before the next one is scheduled.
-        paused = True
-
         @once.once
         def receiving_iterator():
-            nonlocal paused
             next = yield 0
             while next is not None:
-                while paused:
-                    pass
                 next = yield next
+
+        barrier = threading.Barrier(_N_WORKERS)
 
         def call_iterator(_):
             gen = receiving_iterator()
             result = []
+            barrier.wait()
             result.append(gen.send(None))
             for i in range(1, _N_WORKERS * 4):
                 result.append(gen.send(i))
             return result
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=_N_WORKERS) as executor:
-            results = executor.map(call_iterator, range(_N_WORKERS * 2))
-            paused = False  # starter pistol, the race is off!
+            results = executor.map(call_iterator, range(_N_WORKERS))
         for result in results:
             self.assertEqual(result, list(range(_N_WORKERS * 4)))
 
     def test_receiving_iterator_parallel_execution_halting(self):
-        # Pause so we actually are able to test parallel execution, by ensuring that each exec
-        # does not complete before the next one is scheduled.
-        paused = True
-
         @once.once
         def receiving_iterator():
-            nonlocal paused
             next = yield 0
             while next is not None:
-                while paused:
-                    pass
                 next = yield next
+
+        barrier = threading.Barrier(_N_WORKERS)
 
         def call_iterator(n):
             """Call the iterator but end early"""
             gen = receiving_iterator()
             result = []
+            barrier.wait()
             result.append(gen.send(None))
             for i in range(1, n):
                 result.append(gen.send(i))
@@ -676,8 +689,7 @@ class TestOnce(unittest.TestCase):
         # Unlike the previous test, each execution should yield lists of different lengths.
         # This ensures that the iterator does not hang, even if not exhausted
         with concurrent.futures.ThreadPoolExecutor(max_workers=_N_WORKERS) as executor:
-            results = executor.map(call_iterator, range(1, _N_WORKERS * 2))
-            paused = False  # starter pistol, the race is off!
+            results = executor.map(call_iterator, range(1, _N_WORKERS + 1))
         for i, result in enumerate(results):
             self.assertEqual(result, list(range(i + 1)))
 
