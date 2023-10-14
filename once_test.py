@@ -36,17 +36,17 @@ class Counter:
     If we return an integer directly, it will simply return a copy and
     will not update as the number of calls increases.
 
-    The counter can also be paused by setting its paused attribute, which will be convenient to
+    The counter can also be paused by clearing its ready attribute, which will be convenient to
     start multiple runs to execute concurrently.
     """
 
     def __init__(self) -> None:
         self.value = 0
-        self.paused = False
+        self.ready = threading.Event()
+        self.ready.set()
 
     def get_incremented(self) -> int:
-        while self.paused:
-            pass
+        self.ready.wait()
         self.value += 1
         return self.value
 
@@ -359,13 +359,11 @@ class TestOnce(unittest.TestCase):
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=_N_WORKERS) as executor:
             results = executor.map(lambda _: list(yielding_iterator()), range(_N_WORKERS * 2))
-            counter.paused = False  # starter pistol, the race is off!
         for result in results:
             self.assertEqual(result, [1, 2, 3])
 
     def test_iterator_lock_not_held_during_evaluation(self):
         counter = Counter()
-        counter.paused = False
 
         @once.once
         def yielding_iterator():
@@ -376,14 +374,14 @@ class TestOnce(unittest.TestCase):
         gen1 = yielding_iterator()
         gen2 = yielding_iterator()
         self.assertEqual(next(gen1), 1)
-        counter.paused = True
+        counter.ready.clear()
         with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
             gen1_updater = executor.submit(next, gen1)
             self.assertEqual(next(gen2), 1)
             gen2_updater = executor.submit(next, gen2)
             self.assertTrue(gen1_updater.running())
             self.assertTrue(gen2_updater.running())
-            counter.paused = False
+            counter.ready.set()
             self.assertEqual(gen1_updater.result(), 2)
             self.assertEqual(gen2_updater.result(), 2)
 
@@ -572,21 +570,20 @@ class TestOnce(unittest.TestCase):
         class _BlockableClass:
             def __init__(self, test: unittest.TestCase):
                 self.test = test
-                self.started = False
+                self.started = threading.Event()
                 self.counter = Counter()
 
             @once.once_per_instance
             def run(self) -> int:
-                self.started = True
+                self.started.set()
                 return self.counter.get_incremented()
 
         a = _BlockableClass(self)
-        a.counter.paused = True
+        a.counter.ready.clear()
         b = _BlockableClass(self)
         with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
             a_job = executor.submit(a.run)
-            while not a.started:
-                time.sleep(0)
+            a.started.wait()
             # At this point, the A job has started. However, it cannot
             # complete while paused. Despite this, we want to ensure
             # that B can still run.
@@ -594,7 +591,7 @@ class TestOnce(unittest.TestCase):
             # The b_job will deadlock and this will fail if different
             # object executions block each other.
             self.assertEqual(b_job.result(timeout=5), 1)
-            a.counter.paused = False
+            a.counter.ready.set()
             self.assertEqual(a_job.result(timeout=5), 1)
 
     def test_once_per_class_classmethod(self):
