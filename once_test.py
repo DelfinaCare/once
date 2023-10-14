@@ -76,6 +76,17 @@ def execute_with_barrier(*args, n_workers=None):
     return wrapped
 
 
+def ensure_started(executor, func, *args, **kwargs):
+    """Submit an execution to the executor and ensure it starts."""
+    event = threading.Event()
+
+    def run():
+        event.set()
+        return func(*args, **kwargs)
+
+    return executor.submit(run)
+
+
 def generate_once_counter_fn():
     """Generates a once.once decorated function which counts its calls."""
 
@@ -376,11 +387,12 @@ class TestOnce(unittest.TestCase):
         self.assertEqual(next(gen1), 1)
         counter.ready.clear()
         with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
-            gen1_updater = executor.submit(next, gen1)
+            gen1_updater = ensure_started(executor, next, gen1)
+            self.assertFalse(gen1_updater.done())
             self.assertEqual(next(gen2), 1)
-            gen2_updater = executor.submit(next, gen2)
-            self.assertTrue(gen1_updater.running())
-            self.assertTrue(gen2_updater.running())
+            gen2_updater = ensure_started(executor, next, gen2)
+            self.assertFalse(gen1_updater.done())
+            self.assertFalse(gen2_updater.done())
             counter.ready.set()
             self.assertEqual(gen1_updater.result(), 2)
             self.assertEqual(gen2_updater.result(), 2)
@@ -420,27 +432,25 @@ class TestOnce(unittest.TestCase):
     def test_different_fn_do_not_deadlock(self):
         """Ensure different functions use different locks to avoid deadlock."""
 
-        fn2_called = False
+        fn1_called = threading.Event()
+        fn2_called = threading.Event()
 
         # If fn1 is called first, these functions will deadlock unless they can
         # run in parallel.
         @once.once
         def fn1():
-            nonlocal fn2_called
-            start = time.time()
-            while not fn2_called:
-                if time.time() - start > 5:
-                    self.fail("Function fn1 deadlocked for 5 seconds.")
-                time.sleep(0.01)
+            fn1_called.set()
+            if not fn2_called.wait(5.0):
+                self.fail("Function fn1 deadlocked for 5 seconds.")
 
         @once.once
         def fn2():
-            nonlocal fn2_called
-            fn2_called = True
+            fn2_called.set()
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
-            fn1_promise = executor.submit(fn1)
-            executor.submit(fn2)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            fn1_promise = ensure_started(executor, fn1)
+            fn1_called.wait()
+            fn2()
             fn1_promise.result()
 
     def test_closure_gc(self):
