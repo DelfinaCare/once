@@ -5,6 +5,7 @@ import concurrent.futures
 import functools
 import gc
 import inspect
+import math
 import sys
 import threading
 import time
@@ -415,6 +416,22 @@ class TestOnce(unittest.TestCase):
             self.assertEqual(r, 1)
         self.assertEqual(counter.value, 1)
 
+    def test_once_per_thread(self):
+        counter = Counter()
+
+        @execute_with_barrier(n_workers=_N_WORKERS)
+        @once.once_per_thread
+        def counting_fn(*args) -> int:
+            """Returns the call count, which should always be 1."""
+            nonlocal counter
+            del args
+            return counter.get_incremented()
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=_N_WORKERS) as executor:
+            results = list(executor.map(counting_fn, range(_N_WORKERS * 4)))
+        self.assertEqual(min(results), 1)
+        self.assertEqual(max(results), _N_WORKERS)
+
     def test_threaded_multiple_functions(self):
         counters = []
         fns = []
@@ -519,6 +536,40 @@ class TestOnce(unittest.TestCase):
         self.assertEqual(b.once_fn(), 1)
         self.assertEqual(b.once_fn(), 1)
 
+    def test_once_per_class_parallel(self):
+        class _CallOnceClass(Counter):
+            @once.once_per_class
+            def once_fn(self):
+                return self.get_incremented()
+
+        once_obj = _CallOnceClass()
+
+        @execute_with_barrier(n_workers=_N_WORKERS)
+        def execute(_):
+            return once_obj.once_fn()
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=_N_WORKERS) as executor:
+            results = list(executor.map(execute, range(_N_WORKERS * 4)))
+        self.assertEqual(min(results), 1)
+        self.assertEqual(max(results), 1)
+
+    def test_once_per_class_per_thread(self):
+        class _CallOnceClass(Counter):
+            @once.once_per_class_per_thread
+            def once_fn(self):
+                return self.get_incremented()
+
+        once_obj = _CallOnceClass()
+
+        @execute_with_barrier(n_workers=_N_WORKERS)
+        def execute(_):
+            return once_obj.once_fn()
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=_N_WORKERS) as executor:
+            results = list(executor.map(execute, range(_N_WORKERS * 4)))
+        self.assertEqual(min(results), 1)
+        self.assertEqual(max(results), _N_WORKERS)
+
     def test_once_not_allowed_on_method(self):
         with self.assertRaises(SyntaxError):
 
@@ -610,6 +661,40 @@ class TestOnce(unittest.TestCase):
             self.assertEqual(b_job.result(timeout=5), 1)
             a.counter.ready.set()
             self.assertEqual(a_job.result(timeout=5), 1)
+
+    def test_once_per_instance_parallel(self):
+        class _CallOnceClass(Counter):
+            @once.once_per_instance
+            def once_fn(self):
+                return self.get_incremented()
+
+        once_objs = [_CallOnceClass(), _CallOnceClass(), _CallOnceClass(), _CallOnceClass()]
+
+        @execute_with_barrier(n_workers=_N_WORKERS)
+        def execute(i):
+            return once_objs[i % 4].once_fn()
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=_N_WORKERS) as executor:
+            results = list(executor.map(execute, range(_N_WORKERS * 4)))
+        self.assertEqual(min(results), 1)
+        self.assertEqual(max(results), 1)
+
+    def test_once_per_instance_per_thread(self):
+        class _CallOnceClass(Counter):
+            @once.once_per_instance_per_thread
+            def once_fn(self):
+                return self.get_incremented()
+
+        once_objs = [_CallOnceClass(), _CallOnceClass(), _CallOnceClass(), _CallOnceClass()]
+
+        @execute_with_barrier(n_workers=_N_WORKERS)
+        def execute(i):
+            return once_objs[i % 4].once_fn()
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=_N_WORKERS) as executor:
+            results = list(executor.map(execute, range(_N_WORKERS)))
+        self.assertEqual(min(results), 1)
+        self.assertEqual(max(results), math.ceil(_N_WORKERS / 4))
 
     def test_once_per_class_classmethod(self):
         counter = Counter()
@@ -728,6 +813,29 @@ class TestOnceAsync(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await counting_fn1(), 1)
         self.assertEqual(await counting_fn2(), 2)
         self.assertEqual(await counting_fn2(), 2)
+
+    async def test_once_per_thread(self):
+        counter = Counter()
+
+        @once.once_per_thread
+        async def counting_fn(*args) -> int:
+            """Returns the call count, which should always be 1."""
+            nonlocal counter
+            del args
+            return counter.get_incremented()
+
+        @execute_with_barrier(n_workers=_N_WORKERS)
+        def execute():
+            result = counting_fn()
+            return asyncio.run(result)
+
+        threads = [threading.Thread(target=execute) for i in range(_N_WORKERS)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        self.assertEqual(await counting_fn(), _N_WORKERS + 1)
+        self.assertEqual(await counting_fn(), _N_WORKERS + 1)
 
     async def test_failing_function(self):
         counter = Counter()
