@@ -56,6 +56,8 @@ def execute_with_barrier(*args, n_workers=None):
 
     This ensures that our parallel tests actually test concurrency. Without this, it is possible
     that function calls execute as they are being scheduled, and do not truly execute in parallel.
+
+    The decorated function should receive an integer multiple of n_workers invokations.
     """
     # Trick to make the decorator accept an arugment. The first call only gets the n_workers
     # parameter, and then returns a new function with it set that then accepts the function.
@@ -84,7 +86,9 @@ def ensure_started(executor, func, *args, **kwargs):
         event.set()
         return func(*args, **kwargs)
 
-    return executor.submit(run)
+    future = executor.submit(run)
+    event.wait()
+    return future
 
 
 def generate_once_counter_fn():
@@ -361,6 +365,7 @@ class TestOnce(unittest.TestCase):
     def test_iterator_parallel_execution(self):
         counter = Counter()
 
+        # Must be called over an integer multiple of _N_WORKERS
         @execute_with_barrier(n_workers=_N_WORKERS)
         @once.once
         def yielding_iterator():
@@ -387,6 +392,8 @@ class TestOnce(unittest.TestCase):
         self.assertEqual(next(gen1), 1)
         counter.ready.clear()
         with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+            # By using ensure_started and self.assertFalse(updater.done()), we can ensure it is
+            # definitively still running.
             gen1_updater = ensure_started(executor, next, gen1)
             self.assertFalse(gen1_updater.done())
             self.assertEqual(next(gen2), 1)
