@@ -102,9 +102,9 @@ def _wrap(
 ) -> collections.abc.Callable:
     """Generate a wrapped function appropriate to the function type.
 
-    The once_factory lets us reuse logic for both once and once_per_thread.
-    For once, the factory always returns the same _OnceBase object, but for
-    once_per_thread, it would return a unique one for each thread.
+    The once_factory lets us reuse logic for both per-thread and singleton.
+    For a singleton, the factory always returns the same _OnceBase object, but
+    for per thread, it would return a unique one for each thread.
     """
     # Theoretically, we could compute fn_type now. However, this code may be executed at runtime
     # OR at definition time (due to once_per_instance), and we want to only be doing reflection at
@@ -195,7 +195,7 @@ def _once_factory(is_async: bool, per_thread: bool) -> _ONCE_FACTORY_TYPE:
     return lambda: singleton_once
 
 
-def once(func: collections.abc.Callable):
+def once(*args, per_thread=False) -> collections.abc.Callable:
     """Decorator to ensure a function is only called once.
 
     The restriction of only one call also holds across threads. However, this
@@ -217,20 +217,22 @@ def once(func: collections.abc.Callable):
     module and class level functions (i.e. non-closures), this means the return
     value will never be deleted.
     """
+    if len(args) == 1:
+        func: collections.abc.Callable = args[0]
+    elif len(args) > 1:
+        raise ValueError("Up to 1 argument expected.")
+    else:
+        # This trick lets this function be a decorator directly, or be called
+        # to create a decorator.
+        # Both @once and @once() will function correctly.
+        return functools.partial(once, per_thread=per_thread)
     if _is_method(func):
         raise SyntaxError(
             "Attempting to use @once.once decorator on method "
             "instead of @once.once_per_class or @once.once_per_instance"
         )
     fn_type = _wrapped_function_type(func)
-    once_factory = _once_factory(is_async=fn_type in _ASYNC_FN_TYPES, per_thread=False)
-    return _wrap(func, once_factory, fn_type)
-
-
-def once_per_thread(func: collections.abc.Callable):
-    """A version of once which executes only once per thread."""
-    fn_type = _wrapped_function_type(func)
-    once_factory = _once_factory(is_async=fn_type in _ASYNC_FN_TYPES, per_thread=True)
+    once_factory = _once_factory(is_async=fn_type in _ASYNC_FN_TYPES, per_thread=per_thread)
     return _wrap(func, once_factory, fn_type)
 
 
@@ -240,11 +242,15 @@ class once_per_class:  # pylint: disable=invalid-name
     is_classmethod: bool
     is_staticmethod: bool
 
-    def __init__(self, func: collections.abc.Callable) -> None:
+    @classmethod
+    def with_options(cls, per_thread: bool = False):
+        return lambda func: cls(func, per_thread=per_thread)
+
+    def __init__(self, func: collections.abc.Callable, per_thread: bool = False) -> None:
         self.func = self._inspect_function(func)
         self.fn_type = _wrapped_function_type(self.func)
         self.once_factory = _once_factory(
-            is_async=self.fn_type in _ASYNC_FN_TYPES, per_thread=False
+            is_async=self.fn_type in _ASYNC_FN_TYPES, per_thread=per_thread
         )
 
     def _inspect_function(self, func: collections.abc.Callable):
@@ -277,14 +283,14 @@ class once_per_class:  # pylint: disable=invalid-name
         return _wrap(func, self.once_factory, self.fn_type)
 
 
-class once_per_class_per_thread(once_per_class):  # pylint: disable=invalid-name
-    def __init__(self, func: collections.abc.Callable) -> None:
-        super().__init__(func)
-        self.once_factory = _once_factory(self.fn_type in _ASYNC_FN_TYPES, per_thread=True)
+class once_per_instance:  # pylint: disable=invalid-name
+    """A version of once for class methods which runs once per instance."""
 
+    @classmethod
+    def with_options(cls, per_thread: bool = False):
+        return lambda func: cls(func, per_thread=per_thread)
 
-class _OncePerInstanceBase(abc.ABC):
-    def __init__(self, func: collections.abc.Callable) -> None:
+    def __init__(self, func: collections.abc.Callable, per_thread: bool = False) -> None:
         self.func = self._inspect_function(func)
         self.fn_type = _wrapped_function_type(self.func)
         self.is_async_fn = self.fn_type in _ASYNC_FN_TYPES
@@ -292,14 +298,14 @@ class _OncePerInstanceBase(abc.ABC):
         self.callables: weakref.WeakKeyDictionary[
             typing.Any, collections.abc.Callable
         ] = weakref.WeakKeyDictionary()
+        self.per_thread = per_thread
 
-    @abc.abstractmethod
     def once_factory(self) -> _ONCE_FACTORY_TYPE:
         """Generate a new once factory.
 
         A once factory factory if you will.
         """
-        raise NotImplementedError()
+        return _once_factory(self.is_async_fn, per_thread=self.per_thread)
 
     def _inspect_function(self, func: collections.abc.Callable):
         if isinstance(func, (classmethod, staticmethod)):
@@ -321,17 +327,3 @@ class _OncePerInstanceBase(abc.ABC):
                 callable = _wrap(bound_func, self.once_factory(), self.fn_type)
                 self.callables[obj] = callable
         return callable
-
-
-class once_per_instance(_OncePerInstanceBase):  # pylint: disable=invalid-name
-    """A version of once for class methods which runs once per instance."""
-
-    def once_factory(self):
-        return _once_factory(self.is_async_fn, per_thread=False)
-
-
-class once_per_instance_per_thread(_OncePerInstanceBase):  # pylint: disable=invalid-name
-    """A version of once for class methods which runs once per instance per thread."""
-
-    def once_factory(self):
-        return _once_factory(self.is_async_fn, per_thread=True)

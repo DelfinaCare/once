@@ -420,7 +420,7 @@ class TestOnce(unittest.TestCase):
         counter = Counter()
 
         @execute_with_barrier(n_workers=_N_WORKERS)
-        @once.once_per_thread
+        @once.once(per_thread=True)
         def counting_fn(*args) -> int:
             """Returns the call count, which should always be 1."""
             nonlocal counter
@@ -555,7 +555,7 @@ class TestOnce(unittest.TestCase):
 
     def test_once_per_class_per_thread(self):
         class _CallOnceClass(Counter):
-            @once.once_per_class_per_thread
+            @once.once_per_class.with_options(per_thread=True)
             def once_fn(self):
                 return self.get_incremented()
 
@@ -681,7 +681,7 @@ class TestOnce(unittest.TestCase):
 
     def test_once_per_instance_per_thread(self):
         class _CallOnceClass(Counter):
-            @once.once_per_instance_per_thread
+            @once.once_per_instance.with_options(per_thread=True)
             def once_fn(self):
                 return self.get_incremented()
 
@@ -817,7 +817,7 @@ class TestOnceAsync(unittest.IsolatedAsyncioTestCase):
     async def test_once_per_thread(self):
         counter = Counter()
 
-        @once.once_per_thread
+        @once.once(per_thread=True)
         async def counting_fn(*args) -> int:
             """Returns the call count, which should always be 1."""
             nonlocal counter
