@@ -171,28 +171,22 @@ def _wrap(
     return wrapped
 
 
-class _PerItemOnceMap:
-    def __init__(self, is_async: bool) -> None:
-        self.is_async = is_async
-        self.per_item_onces: weakref.WeakKeyDictionary[
-            typing.Any, _OnceBase
-        ] = weakref.WeakKeyDictionary()
-        self.lock = threading.Lock()
-
-    def __getitem__(self, obj: typing.Any) -> _OnceBase:
-        with self.lock:
-            if (obj_once := self.per_item_onces.get(obj)) is None:
-                obj_once = _OnceBase(self.is_async)
-                self.per_item_onces[obj] = obj_once
-        return obj_once
-
-
 def _once_factory(is_async: bool, per_thread: bool) -> _ONCE_FACTORY_TYPE:
-    if per_thread:
-        per_thread_onces = _PerItemOnceMap(is_async)
-        return lambda: per_thread_onces[threading.current_thread()]
-    singleton_once = _OnceBase(is_async)
-    return lambda: singleton_once
+    if not per_thread:
+        singleton_once = _OnceBase(is_async)
+        return lambda: singleton_once
+
+    per_thread_onces = threading.local()
+
+    def _get_once_per_thread():
+        # Read then modify is thread-safe without a lock because `threading.local` is only present
+        # in the currently active thread, which cannot race with itself!
+        if once := getattr(per_thread_onces, "once", None):
+            return once
+        per_thread_onces.once = _OnceBase(is_async)
+        return per_thread_onces.once
+
+    return _get_once_per_thread
 
 
 def once(*args, per_thread=False) -> collections.abc.Callable:
