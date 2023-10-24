@@ -673,6 +673,7 @@ class TestOnce(unittest.TestCase):
     def test_once_per_instance_parallel(self):
         class _CallOnceClass(Counter):
             @once.once_per_instance
+            @execute_with_barrier(n_workers=4)
             def once_fn(self):
                 return self.get_incremented()
 
