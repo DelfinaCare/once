@@ -59,6 +59,12 @@ def execute_with_barrier(*args, n_workers=None):
     that function calls execute as they are being scheduled, and do not truly execute in parallel.
 
     The decorated function should receive an integer multiple of n_workers invokations.
+
+    Please note that calling this decorator outside of our once call will generally not change the
+    semantic meaning. However, it does increase the likelihood that once executions occur in
+    parallel, to increase the chance of races and therefore the chances that our tests catch a race
+    condition, although this is still non-deterministic. Calling this decorator **inside** the once
+    decorator however is deterministic.
     """
     # Trick to make the decorator accept an arugment. The first call only gets the n_workers
     # parameter, and then returns a new function with it set that then accepts the function.
@@ -419,7 +425,7 @@ class TestOnce(unittest.TestCase):
     def test_once_per_thread(self):
         counter = Counter()
 
-        @execute_with_barrier(n_workers=_N_WORKERS)
+        @execute_with_barrier(n_workers=_N_WORKERS)  # increases chance of a race
         @once.once(per_thread=True)
         @execute_with_barrier(n_workers=_N_WORKERS)
         def counting_fn(*args) -> int:
@@ -563,7 +569,7 @@ class TestOnce(unittest.TestCase):
 
         once_obj = _CallOnceClass()
 
-        @execute_with_barrier(n_workers=_N_WORKERS)
+        @execute_with_barrier(n_workers=_N_WORKERS)  # increases chance of a race
         def execute(_):
             return once_obj.once_fn()
 
@@ -690,7 +696,7 @@ class TestOnce(unittest.TestCase):
 
         once_objs = [_CallOnceClass(), _CallOnceClass(), _CallOnceClass(), _CallOnceClass()]
 
-        @execute_with_barrier(n_workers=_N_WORKERS)
+        @execute_with_barrier(n_workers=_N_WORKERS)  # increases chance of a race
         def execute(i):
             return once_objs[i % 4].once_fn()
 

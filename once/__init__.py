@@ -179,8 +179,9 @@ def _once_factory(is_async: bool, per_thread: bool) -> _ONCE_FACTORY_TYPE:
     per_thread_onces = threading.local()
 
     def _get_once_per_thread():
-        # Read then modify is thread-safe without a lock because `threading.local` is only present
-        # in the currently active thread, which cannot race with itself!
+        # Read then modify is thread-safe without a lock because each thread sees its own copy of
+        # copy of `per_thread_onces` thanks to `threading.local`, and each thread cannot race with
+        # itself!
         if once := getattr(per_thread_onces, "once", None):
             return once
         per_thread_onces.once = _OnceBase(is_async)
