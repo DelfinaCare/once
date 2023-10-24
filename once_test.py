@@ -551,7 +551,7 @@ class TestOnce(unittest.TestCase):
 
         once_obj = _CallOnceClass()
 
-        @execute_with_barrier(n_workers=_N_WORKERS)
+        @execute_with_barrier(n_workers=_N_WORKERS)  # increases chance of a race
         def execute(_):
             return once_obj.once_fn()
 
@@ -833,10 +833,10 @@ class TestOnceAsync(unittest.IsolatedAsyncioTestCase):
             del args
             return counter.get_incremented()
 
-        @execute_with_barrier(n_workers=_N_WORKERS)
+        @execute_with_barrier(n_workers=_N_WORKERS)  # increases chance of a race
         def execute():
-            result = counting_fn()
-            return asyncio.run(result)
+            coro = counting_fn()
+            return asyncio.run(coro)
 
         threads = [threading.Thread(target=execute) for i in range(_N_WORKERS)]
         for t in threads:
