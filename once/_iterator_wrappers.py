@@ -1,4 +1,5 @@
 import asyncio
+import abc
 import collections.abc
 import enum
 import functools
@@ -42,7 +43,7 @@ class _IteratorAction(enum.Enum):
     RETURNING = 4
 
 
-class _GeneratorWrapperBase:
+class _GeneratorWrapperBase(abc.ABC):
     """Base class for generator wrapper.
 
     Even though the class stores a result, all of the methods separately take a result input.
@@ -70,6 +71,39 @@ class _GeneratorWrapperBase:
         self.result = IteratorResults()
         self.generating = False
         self.reset_on_exception = reset_on_exception
+
+    # Why do we make the generating boolean property abstract?
+    # This makes the code when the iterator state is WAITING more efficient. If this was simply
+    # a boolean property, the iterator wrapper implementation would need a "sleep(0)" operation
+    # whenever it was in the WAITING state. However, this lets the underlying event use a more
+    # semantically appropriate event to implement the state of generating, which it can then also
+    # wait on whenever it needs to handle the WAITING case. In both cases, the underlying function
+    # of event.wait() is the same as the sleep(0), but the appropriate semantics make the logic
+    # clearer.
+    # Why would we have needed a sleep(0)
+    # In the async case, the coroutine in WAITING state would be waiting for the leader (in state
+    # GENERATING) to finish generating the result, but because WAITING would have control of the
+    # lock, it will never yield execution to the event loop for GENERATING to execute,causing an
+    # infinite loop. An await sleep(0) would trigger this yielding of execution, allowing the event
+    # loop to loop through to the GENERATING so it can complete and unblock the WAITING coroutine.
+    # In the sync case, we also need a sleep(0) for a different reason. While a thread is in the
+    # WAITING state, it would otherwise hog the Global Interpreter Lock in its while loop until
+    # the interprer decides to switch threads. With N threads, N - 1 of them would be in the
+    # WAITING state, and a round-robin interpreter would give each of their while loops the
+    # thread switching time in execution before reaching the single thread in the GENERATING state.
+    # Theoretically, this could result in the GIL only working on the thread in the GENERATING
+    # state 1/Nth of the time, without a time.sleep(0) to manually trigger a GIL switch. In
+    # practice, removing the time.sleep(0) call would result in large drops in performance when
+    # running the multithreaded unit tests.
+    @property
+    @abc.abstractmethod
+    def generating(self) -> bool:
+        raise NotImplementedError()
+
+    @generating.setter
+    @abc.abstractmethod
+    def generating(self, val: bool):
+        raise NotImplementedError()
 
     def compute_next_action(
         self, result: IteratorResults, i: int
@@ -124,8 +158,20 @@ class AsyncGeneratorWrapper(_GeneratorWrapperBase):
     generator: collections.abc.AsyncGenerator
 
     def __init__(self, *args, **kwargs) -> None:
+        self.active_generation_completed = asyncio.Event()
         super().__init__(*args, **kwargs)
         self.lock = asyncio.Lock()
+
+    @property
+    def generating(self):
+        return not self.active_generation_completed.is_set()
+
+    @generating.setter
+    def generating(self, val: bool):
+        if val:
+            self.active_generation_completed.clear()
+        else:
+            self.active_generation_completed.set()
 
     async def yield_results(self) -> collections.abc.AsyncGenerator:
         async with self.lock:
@@ -141,12 +187,8 @@ class AsyncGeneratorWrapper(_GeneratorWrapperBase):
                 action, yield_value = self.compute_next_action(result, i)
             if action == _IteratorAction.RETURNING:
                 return
-            # This is a load bearing sleep. We're waiting for the leader to generate the result,
-            # but we have control of the lock, so the async with will never yield execution to the
-            # event loop, so we would loop forever. By awaiting sleep(0), we yield execution which
-            # will allow us to poll for self.generating readiness.
             if action == _IteratorAction.WAITING:
-                await asyncio.sleep(0)
+                await self.active_generation_completed.wait()
                 continue
             if action == _IteratorAction.YIELDING:
                 next_send = yield yield_value
@@ -177,8 +219,20 @@ class GeneratorWrapper(_GeneratorWrapperBase):
     generator: collections.abc.Generator
 
     def __init__(self, *args, **kwargs) -> None:
+        self.active_generation_completed = threading.Event()
         super().__init__(*args, **kwargs)
         self.lock = threading.Lock()
+
+    @property
+    def generating(self):
+        return not self.active_generation_completed.is_set()
+
+    @generating.setter
+    def generating(self, val: bool):
+        if val:
+            self.active_generation_completed.clear()
+        else:
+            self.active_generation_completed.set()
 
     def yield_results(self) -> collections.abc.Generator:
         with self.lock:
@@ -194,8 +248,7 @@ class GeneratorWrapper(_GeneratorWrapperBase):
             if action == _IteratorAction.RETURNING:
                 return
             if action == _IteratorAction.WAITING:
-                # Indicate to python that it should switch to another thread, so we do not hog the GIL.
-                time.sleep(0)
+                self.active_generation_completed.wait()
                 continue
             if action == _IteratorAction.YIELDING:
                 next_send = yield yield_value
