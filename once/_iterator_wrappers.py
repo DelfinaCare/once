@@ -4,6 +4,7 @@ import enum
 import functools
 import threading
 import time
+import typing
 
 # Before we begin, a note on the assert statements in this file:
 # Why are we using assert in here, you might ask, instead of implementing "proper" error handling?
@@ -24,81 +25,10 @@ class IteratorResults:
         self.exception: Exception | None = None
         self.finished = False
 
-
-# TODO(matt): Refactor AsyncGeneratorWrapper to use state enums, and add error-handling.
-class AsyncGeneratorWrapper:
-    """Wrapper around an async generator which only runs once.
-
-    Subsequent calls will return results from the first call, which is
-    evaluated lazily.
-    """
-
-    def __init__(self, func, *args, **kwargs) -> None:
-        self.generator: collections.abc.AsyncGenerator | None = func(*args, **kwargs)
-        self.result = IteratorResults()
-        self.generating = False
-        self.lock = asyncio.Lock()
-
-    async def yield_results(self) -> collections.abc.AsyncGenerator:
-        i = 0
-        send = None
-        next_val = None
-
-        # A copy of self.generating that we can access outside of the lock.
-        generating = None
-
-        # Indicates that we're tied for the head generator, but someone started generating the next
-        # result first, so we should just poll until the result is available.
-        waiting_for_generating = False
-
-        while True:
-            if waiting_for_generating:
-                # This is a load bearing sleep. We're waiting for the leader to generate the result, but
-                # we have control of the lock, so the async with will never yield execution to the event loop,
-                # so we would loop forever. By awaiting sleep(0), we yield execution which will allow us to
-                # poll for self.generating readiness.
-                await asyncio.sleep(0)
-                waiting_for_generating = False
-            async with self.lock:
-                if i == len(self.result.items) and not self.result.finished:
-                    if self.generating:
-                        # We're at the lead, but someone else is generating the next value
-                        # so we just hop back onto the next iteration of the loop
-                        # until it's ready.
-                        waiting_for_generating = True
-                        continue
-                    # We're at the lead and no one else is generating, so we need to increment
-                    # the iterator. We just store the value in self.result.items so that
-                    # we can later yield it outside of the lock.
-                    assert self.generator is not None
-                    # TODO(matt): Is the fact that we have to suppress typing here a bug?
-                    self.generating = self.generator.asend(send)  # type: ignore
-                    generating = self.generating
-                elif i == len(self.result.items) and self.result.finished:
-                    # All done.
-                    return
-                else:
-                    # We already have the correct result, so we grab it here to
-                    # yield it outside the lock.
-                    next_val = self.result.items[i]
-
-            if generating:
-                try:
-                    next_val = await generating
-                except StopAsyncIteration:
-                    async with self.lock:
-                        self.generator = None  # Allow this to be GCed.
-                        self.result.finished = True
-                        self.generating = None
-                        generating = None
-                        return
-                async with self.lock:
-                    self.result.items.append(next_val)
-                    generating = None
-                    self.generating = None
-
-            send = yield next_val
-            i += 1
+    # NOTE: We could define a "fast_path", where we know we are already done, and it is safe to
+    # directly yield results without further lock checks, by checking the following condition:
+    # `self.finished and self.exception is None`. However, in practice, it does not appear to be
+    # worth it.
 
 
 class _IteratorAction(enum.Enum):
@@ -108,35 +38,151 @@ class _IteratorAction(enum.Enum):
     YIELDING = 2
     # Waiting for the underlying iterator, already triggered from another call.
     WAITING = 3
+    # We can return, we are done!
+    RETURNING = 4
 
 
-class GeneratorWrapper:
+class _GeneratorWrapperBase:
+    """Base class for generator wrapper.
+
+    Even though the class stores a result, all of the methods separately take a result input.
+    Why is that? Great question.
+
+    While yielding results simultaneously from multiple tasks or threads, we want to support
+    configurable outcomes for exception handling. Specifically, taking `result` as an argument is
+    critical in order to support any *already executing* iterators finishing with their cached
+    result and exception, but restarting new iterators from the beginning. This is done by creating
+    a local reference to `result` when the iterator is started and passing that around thereafter.
+
+    When an Exception occurs and reset_on_exception, we begin the execution again from the
+    beginning for all new iterators. This is required because the received values during execution
+    may be critical to the returned. For example, imagine a caller of a paginated API who chose to
+    user iterator.send to propagate the next token. Given that the state of the output might depend
+    on the state of what was received, to be semantically correct, we must start from the
+    beginning.
+    """
+
+    def __init__(
+        self, reset_on_exception: bool, func: collections.abc.Callable, *args, **kwargs
+    ) -> None:
+        self.callable: collections.abc.Callable | None = functools.partial(func, *args, **kwargs)
+        self.generator = self.callable()
+        self.result = IteratorResults()
+        self.generating = False
+        self.reset_on_exception = reset_on_exception
+
+    def compute_next_action(
+        self, result: IteratorResults, i: int
+    ) -> typing.Tuple[_IteratorAction, typing.Any]:
+        """Must be called with lock."""
+        if i == len(result.items):
+            if result.finished:
+                if result.exception:
+                    raise result.exception
+                return _IteratorAction.RETURNING, None
+            if self.generating:
+                return _IteratorAction.WAITING, None
+            else:
+                # If all of these functions are called with locks, we will never have more than one
+                # caller have GENERATING at any time.
+                self.generating = True
+                return _IteratorAction.GENERATING, None
+        else:
+            return _IteratorAction.YIELDING, result.items[i]
+
+    def record_successful_completion(self, result: IteratorResults):
+        """Must be called with lock."""
+        result.finished = True
+        self.generating = False
+        self.generator = None  # Allow this to be GCed.
+        self.callable = None  # Allow this to be GCed.
+
+    def record_item(self, result: IteratorResults, item: typing.Any):
+        self.generating = False
+        result.items.append(item)
+
+    def record_exception(self, result: IteratorResults, exception: Exception):
+        """Must be called with lock."""
+        result.finished = True
+        # We need to keep track of the exception so that we can raise it in the same
+        # position every time the iterator is called.
+        result.exception = exception
+        self.generating = False
+        assert self.callable is not None
+        self.generator = self.callable()  # Reset the iterator for the next call.
+        if self.reset_on_exception:
+            self.result = IteratorResults()
+
+
+class AsyncGeneratorWrapper(_GeneratorWrapperBase):
+    """Wrapper around an async generator which only runs once.
+
+    Subsequent calls will return results from the first call, which is
+    evaluated lazily.
+    """
+
+    generator: collections.abc.AsyncGenerator
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.lock = asyncio.Lock()
+
+    async def yield_results(self) -> collections.abc.AsyncGenerator:
+        async with self.lock:
+            result = self.result
+
+        i = 0
+        yield_value = None
+        next_send = None
+
+        while True:
+            # With a lock, we figure out which action to take, and then we take it after release.
+            async with self.lock:
+                action, yield_value = self.compute_next_action(result, i)
+            if action == _IteratorAction.RETURNING:
+                return
+            # This is a load bearing sleep. We're waiting for the leader to generate the result,
+            # but we have control of the lock, so the async with will never yield execution to the
+            # event loop, so we would loop forever. By awaiting sleep(0), we yield execution which
+            # will allow us to poll for self.generating readiness.
+            if action == _IteratorAction.WAITING:
+                await asyncio.sleep(0)
+                continue
+            if action == _IteratorAction.YIELDING:
+                next_send = yield yield_value
+                i += 1
+                continue
+            assert action == _IteratorAction.GENERATING
+            assert self.generator is not None
+            try:
+                item = await self.generator.asend(next_send)
+            except StopAsyncIteration:
+                async with self.lock:
+                    self.record_successful_completion(result)
+            except Exception as e:
+                async with self.lock:
+                    self.record_exception(result, e)
+            else:
+                async with self.lock:
+                    self.record_item(result, item)
+
+
+class GeneratorWrapper(_GeneratorWrapperBase):
     """Wrapper around an sync generator which only runs once.
 
     Subsequent calls will return results from the first call, which is
     evaluated lazily.
     """
 
-    def __init__(self, func: collections.abc.Callable, *args, **kwargs) -> None:
-        self.callable: collections.abc.Callable | None = functools.partial(func, *args, **kwargs)
-        self.generator: collections.abc.Generator | None = self.callable()
-        self.result = IteratorResults()
-        self.generating = False
+    generator: collections.abc.Generator
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
         self.lock = threading.Lock()
 
     def yield_results(self) -> collections.abc.Generator:
-        # We will grab a reference to the existing result. In the event of an Exception, a new
-        # execution can be kicked off to retry, but the existing call will therefore continue as
-        # if that never happened, and still raise an Exception. This will avoid mixing results from
-        # different iterators.
-
-        # Fast path for subsequent repeated call:
         with self.lock:
             result = self.result
-            fast_path = result.finished and result.exception is None
-        if fast_path:
-            yield from self.result.items
-            return
         i = 0
         yield_value = None
         next_send = None
@@ -144,19 +190,9 @@ class GeneratorWrapper:
             action: _IteratorAction | None = None
             # With a lock, we figure out which action to take, and then we take it after release.
             with self.lock:
-                if i == len(result.items):
-                    if result.finished:
-                        if result.exception:
-                            raise result.exception
-                        return
-                    if self.generating:
-                        action = _IteratorAction.WAITING
-                    else:
-                        action = _IteratorAction.GENERATING
-                        self.generating = True
-                else:
-                    action = _IteratorAction.YIELDING
-                    yield_value = self.result.items[i]
+                action, yield_value = self.compute_next_action(result, i)
+            if action == _IteratorAction.RETURNING:
+                return
             if action == _IteratorAction.WAITING:
                 # Indicate to python that it should switch to another thread, so we do not hog the GIL.
                 time.sleep(0)
@@ -171,21 +207,10 @@ class GeneratorWrapper:
                 item = self.generator.send(next_send)
             except StopIteration:
                 with self.lock:
-                    result.finished = True
-                    self.generating = False
-                    self.generator = None  # Allow this to be GCed.
-                    self.callable = None  # Allow this to be GCed.
+                    self.record_successful_completion(result)
             except Exception as e:
                 with self.lock:
-                    result.finished = True
-                    # We need to keep track of the exception so that we can raise it in the same
-                    # position every time the iterator is called.
-                    result.exception = e
-                    self.generating = False
-                    assert self.callable is not None
-                    self.generator = self.callable()  # Reset the iterator for the next call.
-                    self.result = IteratorResults()
+                    self.record_exception(result, e)
             else:
                 with self.lock:
-                    self.generating = False
-                    result.items.append(item)
+                    self.record_item(result, item)

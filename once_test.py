@@ -8,7 +8,6 @@ import inspect
 import math
 import sys
 import threading
-import time
 import unittest
 import weakref
 
@@ -28,7 +27,7 @@ if sys.version_info.minor < 10:
 
 
 # This is a "large" number of workers to schedule function calls in parallel.
-_N_WORKERS = 16
+_N_WORKERS = 32
 
 
 class Counter:
@@ -330,6 +329,22 @@ class TestOnce(unittest.TestCase):
         self.assertEqual(counter.get_incremented(), 2)
         with self.assertRaises(ValueError):
             sample_failing_fn()
+        self.assertEqual(counter.get_incremented(), 3, "Function call incremented the counter")
+
+    def test_failing_function_retry_exceptions(self):
+        counter = Counter()
+
+        @once.once(retry_exceptions=True)
+        def sample_failing_fn():
+            if counter.get_incremented() < 4:
+                raise ValueError("expected failure")
+            return 1
+
+        with self.assertRaises(ValueError):
+            sample_failing_fn()
+        self.assertEqual(counter.get_incremented(), 2)
+        with self.assertRaises(ValueError):
+            sample_failing_fn()
         # This ensures that this was a new function call, not a cached result.
         self.assertEqual(counter.get_incremented(), 4)
         self.assertEqual(sample_failing_fn(), 1)
@@ -350,6 +365,40 @@ class TestOnce(unittest.TestCase):
         counter = Counter()
 
         @once.once
+        def sample_failing_fn():
+            yield counter.get_incremented()
+            result = counter.get_incremented()
+            yield result
+            if result == 2:
+                raise ValueError("expected failure after 2.")
+
+        # Both of these calls should return the same results.
+        call1 = sample_failing_fn()
+        call2 = sample_failing_fn()
+        self.assertEqual(next(call1), 1)
+        self.assertEqual(next(call2), 1)
+        self.assertEqual(next(call1), 2)
+        self.assertEqual(next(call2), 2)
+        with self.assertRaises(ValueError):
+            next(call1)
+        with self.assertRaises(ValueError):
+            next(call2)
+        # These next 2 calls should also fail.
+        call3 = sample_failing_fn()
+        call4 = sample_failing_fn()
+        self.assertEqual(next(call3), 1)
+        self.assertEqual(next(call4), 1)
+        self.assertEqual(next(call3), 2)
+        self.assertEqual(next(call4), 2)
+        with self.assertRaises(ValueError):
+            next(call3)
+        with self.assertRaises(ValueError):
+            next(call4)
+
+    def test_failing_generator_retry_exceptions(self):
+        counter = Counter()
+
+        @once.once(retry_exceptions=True)
         def sample_failing_fn():
             yield counter.get_incremented()
             result = counter.get_incremented()
@@ -869,6 +918,22 @@ class TestOnceAsync(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(counter.get_incremented(), 2)
         with self.assertRaises(ValueError):
             await sample_failing_fn()
+        self.assertEqual(counter.get_incremented(), 3, "Function call incremented the counter")
+
+    async def test_failing_function_retry_exceptions(self):
+        counter = Counter()
+
+        @once.once(retry_exceptions=True)
+        async def sample_failing_fn():
+            if counter.get_incremented() < 4:
+                raise ValueError("expected failure")
+            return 1
+
+        with self.assertRaises(ValueError):
+            await sample_failing_fn()
+        self.assertEqual(counter.get_incremented(), 2)
+        with self.assertRaises(ValueError):
+            await sample_failing_fn()
         # This ensures that this was a new function call, not a cached result.
         self.assertEqual(counter.get_incremented(), 4)
         self.assertEqual(await sample_failing_fn(), 1)
@@ -918,21 +983,70 @@ class TestOnceAsync(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([i async for i in async_yielding_iterator()], [1, 2, 3])
         self.assertEqual([i async for i in async_yielding_iterator()], [1, 2, 3])
 
-    @unittest.skip("This currently hangs and needs to be fixed, GitHub Issue #12")
     async def test_failing_generator(self):
         counter = Counter()
 
         @once.once
         async def sample_failing_fn():
             yield counter.get_incremented()
-            raise ValueError("expected failure")
+            result = counter.get_incremented()
+            yield result
+            if result == 2:
+                raise ValueError("we raise an error when result is exactly 2")
 
+        # Both of these calls should return the same results.
+        call1 = sample_failing_fn()
+        call2 = sample_failing_fn()
+        self.assertEqual(await anext(call1), 1)
+        self.assertEqual(await anext(call2), 1)
+        self.assertEqual(await anext(call1), 2)
+        self.assertEqual(await anext(call2), 2)
         with self.assertRaises(ValueError):
-            [i async for i in sample_failing_fn()]
+            await anext(call1)
         with self.assertRaises(ValueError):
-            [i async for i in sample_failing_fn()]
-        self.assertEqual(await anext(sample_failing_fn()), 1)
-        self.assertEqual(await anext(sample_failing_fn()), 1)
+            await anext(call2)
+        # These next 2 calls should also fail.
+        call3 = sample_failing_fn()
+        call4 = sample_failing_fn()
+        self.assertEqual(await anext(call3), 1)
+        self.assertEqual(await anext(call4), 1)
+        self.assertEqual(await anext(call3), 2)
+        self.assertEqual(await anext(call4), 2)
+        with self.assertRaises(ValueError):
+            await anext(call3)
+        with self.assertRaises(ValueError):
+            await anext(call4)
+
+    async def test_failing_generator_retry_exceptions(self):
+        counter = Counter()
+
+        @once.once(retry_exceptions=True)
+        async def sample_failing_fn():
+            yield counter.get_incremented()
+            result = counter.get_incremented()
+            yield result
+            if result == 2:
+                raise ValueError("we raise an error when result is exactly 2")
+
+        # Both of these calls should return the same results.
+        call1 = sample_failing_fn()
+        call2 = sample_failing_fn()
+        self.assertEqual(await anext(call1), 1)
+        self.assertEqual(await anext(call2), 1)
+        self.assertEqual(await anext(call1), 2)
+        self.assertEqual(await anext(call2), 2)
+        with self.assertRaises(ValueError):
+            await anext(call1)
+        with self.assertRaises(ValueError):
+            await anext(call2)
+        # These next 2 calls should succeed.
+        call3 = sample_failing_fn()
+        call4 = sample_failing_fn()
+        self.assertEqual([i async for i in call3], [3, 4])
+        self.assertEqual([i async for i in call4], [3, 4])
+        # Subsequent calls should return the original value.
+        self.assertEqual([i async for i in sample_failing_fn()], [3, 4])
+        self.assertEqual([i async for i in sample_failing_fn()], [3, 4])
 
     async def test_iterator_is_lazily_evaluted(self):
         counter = Counter()
