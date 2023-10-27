@@ -5,6 +5,7 @@ import concurrent.futures
 import functools
 import gc
 import inspect
+import math
 import sys
 import threading
 import time
@@ -51,28 +52,42 @@ class Counter:
         return self.value
 
 
-def execute_with_barrier(*args, n_workers=None):
+def execute_with_barrier(*args, n_workers=None, is_async=False):
     """Decorator to ensure function calls do not begin until at least n_workers have started.
 
     This ensures that our parallel tests actually test concurrency. Without this, it is possible
     that function calls execute as they are being scheduled, and do not truly execute in parallel.
 
     The decorated function should receive an integer multiple of n_workers invokations.
+
+    Please note that calling this decorator outside of our once call will generally not change the
+    semantic meaning. However, it does increase the likelihood that once executions occur in
+    parallel, to increase the chance of races and therefore the chances that our tests catch a race
+    condition, although this is still non-deterministic. Calling this decorator **inside** the once
+    decorator however is deterministic.
     """
     # Trick to make the decorator accept an arugment. The first call only gets the n_workers
     # parameter, and then returns a new function with it set that then accepts the function.
     if n_workers is None:
         raise ValueError("n_workers not set")
     if len(args) == 0:
-        return functools.partial(execute_with_barrier, n_workers=n_workers)
+        return functools.partial(execute_with_barrier, n_workers=n_workers, is_async=is_async)
     if len(args) > 1:
         raise ValueError("Up to one argument expected.")
     func = args[0]
     barrier = threading.Barrier(n_workers)
 
-    def wrapped(*args, **kwargs):
-        barrier.wait()
-        return func(*args, **kwargs)
+    if is_async:
+
+        async def wrapped(*args, **kwargs):
+            barrier.wait()  # yes I know
+            return await func(*args, **kwargs)
+
+    else:
+
+        def wrapped(*args, **kwargs):
+            barrier.wait()
+            return func(*args, **kwargs)
 
     functools.update_wrapper(wrapped, func)
     return wrapped
@@ -415,6 +430,23 @@ class TestOnce(unittest.TestCase):
             self.assertEqual(r, 1)
         self.assertEqual(counter.value, 1)
 
+    def test_once_per_thread(self):
+        counter = Counter()
+
+        @execute_with_barrier(n_workers=_N_WORKERS)  # increases chance of a race
+        @once.once(per_thread=True)
+        @execute_with_barrier(n_workers=_N_WORKERS)
+        def counting_fn(*args) -> int:
+            """Returns the call count, which should always be 1."""
+            nonlocal counter
+            del args
+            return counter.get_incremented()
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=_N_WORKERS) as executor:
+            results = list(executor.map(counting_fn, range(_N_WORKERS * 4)))
+        self.assertEqual(min(results), 1)
+        self.assertEqual(max(results), _N_WORKERS)
+
     def test_threaded_multiple_functions(self):
         counters = []
         fns = []
@@ -519,6 +551,41 @@ class TestOnce(unittest.TestCase):
         self.assertEqual(b.once_fn(), 1)
         self.assertEqual(b.once_fn(), 1)
 
+    def test_once_per_class_parallel(self):
+        class _CallOnceClass(Counter):
+            @once.once_per_class
+            def once_fn(self):
+                return self.get_incremented()
+
+        once_obj = _CallOnceClass()
+
+        @execute_with_barrier(n_workers=_N_WORKERS)  # increases chance of a race
+        def execute(_):
+            return once_obj.once_fn()
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=_N_WORKERS) as executor:
+            results = list(executor.map(execute, range(_N_WORKERS * 4)))
+        self.assertEqual(min(results), 1)
+        self.assertEqual(max(results), 1)
+
+    def test_once_per_class_per_thread(self):
+        class _CallOnceClass(Counter):
+            @once.once_per_class.with_options(per_thread=True)
+            @execute_with_barrier(n_workers=_N_WORKERS)
+            def once_fn(self):
+                return self.get_incremented()
+
+        once_obj = _CallOnceClass()
+
+        @execute_with_barrier(n_workers=_N_WORKERS)  # increases chance of a race
+        def execute(_):
+            return once_obj.once_fn()
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=_N_WORKERS) as executor:
+            results = list(executor.map(execute, range(_N_WORKERS * 4)))
+        self.assertEqual(min(results), 1)
+        self.assertEqual(max(results), _N_WORKERS)
+
     def test_once_not_allowed_on_method(self):
         with self.assertRaises(SyntaxError):
 
@@ -610,6 +677,42 @@ class TestOnce(unittest.TestCase):
             self.assertEqual(b_job.result(timeout=5), 1)
             a.counter.ready.set()
             self.assertEqual(a_job.result(timeout=5), 1)
+
+    def test_once_per_instance_parallel(self):
+        class _CallOnceClass(Counter):
+            @once.once_per_instance
+            @execute_with_barrier(n_workers=4)
+            def once_fn(self):
+                return self.get_incremented()
+
+        once_objs = [_CallOnceClass(), _CallOnceClass(), _CallOnceClass(), _CallOnceClass()]
+
+        @execute_with_barrier(n_workers=_N_WORKERS)
+        def execute(i):
+            return once_objs[i % 4].once_fn()
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=_N_WORKERS) as executor:
+            results = list(executor.map(execute, range(_N_WORKERS * 4)))
+        self.assertEqual(min(results), 1)
+        self.assertEqual(max(results), 1)
+
+    def test_once_per_instance_per_thread(self):
+        class _CallOnceClass(Counter):
+            @once.once_per_instance.with_options(per_thread=True)
+            @execute_with_barrier(n_workers=_N_WORKERS)
+            def once_fn(self):
+                return self.get_incremented()
+
+        once_objs = [_CallOnceClass(), _CallOnceClass(), _CallOnceClass(), _CallOnceClass()]
+
+        @execute_with_barrier(n_workers=_N_WORKERS)  # increases chance of a race
+        def execute(i):
+            return once_objs[i % 4].once_fn()
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=_N_WORKERS) as executor:
+            results = list(executor.map(execute, range(_N_WORKERS)))
+        self.assertEqual(min(results), 1)
+        self.assertEqual(max(results), math.ceil(_N_WORKERS / 4))
 
     def test_once_per_class_classmethod(self):
         counter = Counter()
@@ -728,6 +831,29 @@ class TestOnceAsync(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await counting_fn1(), 1)
         self.assertEqual(await counting_fn2(), 2)
         self.assertEqual(await counting_fn2(), 2)
+
+    async def test_once_per_thread(self):
+        counter = Counter()
+
+        @once.once(per_thread=True)
+        @execute_with_barrier(n_workers=_N_WORKERS, is_async=True)
+        async def counting_fn(*args) -> int:
+            """Returns the call count, which should always be 1."""
+            nonlocal counter
+
+            del args
+            return counter.get_incremented()
+
+        @execute_with_barrier(n_workers=_N_WORKERS)  # increases chance of a race
+        def execute(*args):
+            coro = counting_fn(*args)
+            return asyncio.run(coro)
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=_N_WORKERS) as executor:
+            results = list(executor.map(execute, range(_N_WORKERS)))
+            self.assertEqual(sorted(results), list(range(1, _N_WORKERS + 1)))
+            results = list(executor.map(execute, range(_N_WORKERS)))
+            self.assertEqual(sorted(results), list(range(1, _N_WORKERS + 1)))
 
     async def test_failing_function(self):
         counter = Counter()
