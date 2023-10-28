@@ -575,16 +575,22 @@ class TestOnce(unittest.TestCase):
         self.assertIsNone(ephemeral_ref())
 
     def test_function_signature_preserved(self):
-        @once.once
         def type_annotated_fn(arg: float) -> int:
             """Very descriptive docstring."""
             del arg
             return 1
 
-        sig = inspect.signature(type_annotated_fn)
-        self.assertIs(sig.parameters["arg"].annotation, float)
-        self.assertIs(sig.return_annotation, int)
-        self.assertEqual(type_annotated_fn.__doc__, "Very descriptive docstring.")
+        decorated_function = once.once(type_annotated_fn)
+        original_sig = inspect.signature(type_annotated_fn)
+        decorated_sig = inspect.signature(decorated_function)
+        self.assertIs(original_sig.parameters["arg"].annotation, float)
+        self.assertIs(decorated_sig.parameters["arg"].annotation, float)
+        self.assertIs(original_sig.return_annotation, int)
+        self.assertIs(decorated_sig.return_annotation, int)
+        self.assertEqual(inspect.getdoc(type_annotated_fn), inspect.getdoc(decorated_function))
+        if sys.flags.optimize >= 2:
+            self.skipTest("docstrings get stripped with -OO")
+        self.assertEqual(inspect.getdoc(type_annotated_fn), "Very descriptive docstring.")
 
     def test_once_per_class(self):
         class _CallOnceClass(Counter):
