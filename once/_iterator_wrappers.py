@@ -132,6 +132,7 @@ class _GeneratorWrapperBase(abc.ABC):
         self.callable = None  # Allow this to be GCed.
 
     def record_item(self, result: IteratorResults, item: typing.Any):
+        """Must be called with lock."""
         self.generating = False
         result.items.append(item)
 
@@ -146,6 +147,8 @@ class _GeneratorWrapperBase(abc.ABC):
         self.generator = self.callable()  # Reset the iterator for the next call.
         if self.reset_on_exception:
             self.result = IteratorResults()
+        else:
+            self.generator = None  # allow this to be GCed
 
 
 class AsyncGeneratorWrapper(_GeneratorWrapperBase):
