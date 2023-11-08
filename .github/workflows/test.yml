@@ -20,6 +20,8 @@ jobs:
             cache: pip
         - run: pip install pytest
         - run: pytest . --junitxml=junit/test_py${{ matrix.python-version }}_on_${{ matrix.os }}.xml
+        - run: python -O once_test.py
+        - run: python -OO once_test.py
         - name: Upload pytest test results
           uses: actions/upload-artifact@v3
           if: success() || failure()
