@@ -161,6 +161,7 @@ class AsyncGeneratorWrapper(_GeneratorWrapperBase):
     generator: collections.abc.AsyncGenerator
 
     def __init__(self, *args, **kwargs) -> None:
+        # Must be called before super init so its self.generating setter succeeds.
         self.active_generation_completed = asyncio.Event()
         super().__init__(*args, **kwargs)
         self.lock = asyncio.Lock()
@@ -222,6 +223,7 @@ class GeneratorWrapper(_GeneratorWrapperBase):
     generator: collections.abc.Generator
 
     def __init__(self, *args, **kwargs) -> None:
+        # Must be called before super init so its self.generating setter succeeds.
         self.active_generation_completed = threading.Event()
         super().__init__(*args, **kwargs)
         self.lock = threading.Lock()
