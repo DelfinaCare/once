@@ -138,58 +138,40 @@ def _wrap(
                     return
 
     elif fn_type == _WrappedFunctionType.ASYNC_FUNCTION:
-        if retry_exceptions:
 
-            async def wrapped(*args, **kwargs) -> typing.Any:
-                once_base: _OnceBase = once_factory()
-                async with once_base.async_lock:
-                    if not once_base.called:
+        async def wrapped(*args, **kwargs) -> typing.Any:
+            once_base: _OnceBase = once_factory()
+            async with once_base.async_lock:
+                if not once_base.called:
+                    try:
                         once_base.return_value = await func(*args, **kwargs)
-                        once_base.called = True
-                    return once_base.return_value
-
-        else:
-
-            async def wrapped(*args, **kwargs) -> typing.Any:
-                once_base: _OnceBase = once_factory()
-                async with once_base.async_lock:
-                    if not once_base.called:
-                        try:
-                            once_base.return_value = await func(*args, **kwargs)
-                        except Exception as exception:
-                            once_base.return_value = _CachedException(exception)
-                        once_base.called = True
-                    return_value = once_base.return_value
-                if isinstance(return_value, _CachedException):
-                    raise return_value.exception
-                return return_value
+                    except Exception as exception:
+                        if retry_exceptions:
+                            raise exception
+                        once_base.return_value = _CachedException(exception)
+                    once_base.called = True
+                return_value = once_base.return_value
+            if isinstance(return_value, _CachedException):
+                raise return_value.exception
+            return return_value
 
     elif fn_type == _WrappedFunctionType.SYNC_FUNCTION:
-        if retry_exceptions:
 
-            def wrapped(*args, **kwargs) -> typing.Any:
-                once_base: _OnceBase = once_factory()
-                with once_base.lock:
-                    if not once_base.called:
+        def wrapped(*args, **kwargs) -> typing.Any:
+            once_base: _OnceBase = once_factory()
+            with once_base.lock:
+                if not once_base.called:
+                    try:
                         once_base.return_value = func(*args, **kwargs)
-                        once_base.called = True
-                    return once_base.return_value
-
-        else:
-
-            def wrapped(*args, **kwargs) -> typing.Any:
-                once_base: _OnceBase = once_factory()
-                with once_base.lock:
-                    if not once_base.called:
-                        try:
-                            once_base.return_value = func(*args, **kwargs)
-                        except Exception as exception:
-                            once_base.return_value = _CachedException(exception)
-                        once_base.called = True
-                    return_value = once_base.return_value
-                if isinstance(return_value, _CachedException):
-                    raise return_value.exception
-                return return_value
+                    except Exception as exception:
+                        if retry_exceptions:
+                            raise exception
+                        once_base.return_value = _CachedException(exception)
+                    once_base.called = True
+                return_value = once_base.return_value
+            if isinstance(return_value, _CachedException):
+                raise return_value.exception
+            return return_value
 
     elif fn_type == _WrappedFunctionType.SYNC_GENERATOR:
 
