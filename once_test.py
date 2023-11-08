@@ -63,14 +63,14 @@ def parallel_map(
         if not isinstance(call_args, tuple):
             raise TypeError("call arguments must be a tuple")
         batches[i % n_threads].append((i, call_args))
-    n_calls = i + 1
+    n_calls = i + 1  # len(call_args), but it is now an exhuasted iterator.
     unset = object()
     results_lock = threading.Lock()
     results = [unset for _ in range(n_calls)]
 
     # This barrier is used to ensure that all calls release together, after this function has
     # completed its setup of creating them.
-    start_barrier = threading.Barrier(min(len(batches), n_calls))
+    start_barrier = threading.Barrier(min(n_threads, n_calls))
 
     def wrapped_fn(batch):
         start_barrier.wait()
