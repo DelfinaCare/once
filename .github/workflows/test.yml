@@ -23,7 +23,7 @@ jobs:
         - run: python -O once_test.py
         - run: python -OO once_test.py
         - name: Upload pytest test results
-          uses: actions/upload-artifact@v3
+          uses: actions/upload-artifact@v4
           if: success() || failure()
           with:
             name: test-py${{ matrix.python-version}}-on-${{ matrix.os }}
