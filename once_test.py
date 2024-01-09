@@ -963,16 +963,11 @@ class TestOnceAsync(unittest.IsolatedAsyncioTestCase):
             del args
             return counter.get_incremented()
 
-        results_lock = asyncio.Lock()
-        results = []
-
         async def counting_fn_multiple_caller(*args):
             """Calls counting_fn() multiple times ensuring identical result."""
             result = await counting_fn()
             for i in range(5):
                 self.assertEqual(await counting_fn(), result)
-            async with results_lock:
-                results.append(result)
             return result
 
         def execute(*args):
