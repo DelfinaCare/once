@@ -15,7 +15,7 @@ from . import _iterator_wrappers
 
 def _is_method(func: collections.abc.Callable):
     """Determine if a function is a method on a class."""
-    if isinstance(func, (classmethod, staticmethod)):
+    if isinstance(func, (classmethod, staticmethod, property)):
         return True
     sig = inspect.signature(func)
     return "self" in sig.parameters
@@ -309,6 +309,8 @@ class once_per_class:  # pylint: disable=invalid-name
 class once_per_instance:  # pylint: disable=invalid-name
     """A version of once for class methods which runs once per instance."""
 
+    is_property: bool
+
     @classmethod
     def with_options(cls, per_thread: bool = False, retry_exceptions=False):
         return lambda func: cls(func, per_thread=per_thread, retry_exceptions=retry_exceptions)
@@ -339,6 +341,11 @@ class once_per_instance:  # pylint: disable=invalid-name
     def _inspect_function(self, func: collections.abc.Callable):
         if isinstance(func, (classmethod, staticmethod)):
             raise SyntaxError("Must use @once.once_per_class on classmethod and staticmethod")
+        if isinstance(func, property):
+            func = func.fget
+            self.is_property = True
+        else:
+            self.is_property = False
         if not _is_method(func):
             raise SyntaxError(
                 "Attempting to use @once.once_per_instance method-only decorator "
@@ -357,4 +364,6 @@ class once_per_instance:  # pylint: disable=invalid-name
                     bound_func, self.once_factory(), self.fn_type, self.retry_exceptions
                 )
                 self.callables[obj] = callable
+        if self.is_property:
+            return callable()
         return callable
