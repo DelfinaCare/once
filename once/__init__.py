@@ -1,4 +1,5 @@
 """Utility for initialization ensuring functions are called only once."""
+
 import abc
 import asyncio
 import collections.abc
@@ -126,7 +127,11 @@ def _wrap(
             async with once_base.async_lock:
                 if not once_base.called:
                     once_base.return_value = _iterator_wrappers.AsyncGeneratorWrapper(
-                        retry_exceptions, func, *args, allow_force_rerun=once_base.allow_force_rerun, **kwargs
+                        retry_exceptions,
+                        func,
+                        *args,
+                        allow_force_rerun=once_base.allow_force_rerun,
+                        **kwargs,
                     )
                     once_base.called = True
                 return_value = once_base.return_value
@@ -181,7 +186,11 @@ def _wrap(
             with once_base.lock:
                 if not once_base.called:
                     once_base.return_value = _iterator_wrappers.GeneratorWrapper(
-                        retry_exceptions, func, *args, allow_force_rerun=once_base.allow_force_rerun, **kwargs
+                        retry_exceptions,
+                        func,
+                        *args,
+                        allow_force_rerun=once_base.allow_force_rerun,
+                        **kwargs,
                     )
                     once_base.called = True
                 iterator = once_base.return_value
@@ -195,6 +204,7 @@ def _wrap(
     if once_base.allow_force_rerun:
         wrapped.force_rerun = functools.partial(wrapped, _once_force_rerun=True)
     else:
+
         def force_rerun(*args, **kwargs):
             # This force_rerun won't necessarily have the right type, but it doesn't
             # need to since it's an error case anyway. Just here for a more helpful
@@ -203,9 +213,9 @@ def _wrap(
                 f"force_rerun() is not allowed to be called on onced function {func}.\n"
                 "Did you mean to add `allow_force_rerun=True` to your once.once() annotation?"
             )
-        
-        wrapped.force_rerun = force_rerun 
-    
+
+        wrapped.force_rerun = force_rerun
+
     functools.update_wrapper(wrapped, func)
     return wrapped
 
@@ -229,7 +239,9 @@ def _once_factory(is_async: bool, per_thread: bool, allow_force_rerun: bool) -> 
     return _get_once_per_thread
 
 
-def once(*args, per_thread=False, retry_exceptions=False, allow_force_rerun=False) -> collections.abc.Callable:
+def once(
+    *args, per_thread=False, retry_exceptions=False, allow_force_rerun=False
+) -> collections.abc.Callable:
     """Decorator to ensure a function is only called once.
 
     The restriction of only one call also holds across threads. However, this
@@ -273,7 +285,10 @@ def once(*args, per_thread=False, retry_exceptions=False, allow_force_rerun=Fals
         # to create a decorator.
         # Both @once and @once() will function correctly.
         return functools.partial(
-            once, per_thread=per_thread, retry_exceptions=retry_exceptions, allow_force_rerun=allow_force_rerun
+            once,
+            per_thread=per_thread,
+            retry_exceptions=retry_exceptions,
+            allow_force_rerun=allow_force_rerun,
         )
     if _is_method(func):
         raise SyntaxError(
@@ -281,7 +296,11 @@ def once(*args, per_thread=False, retry_exceptions=False, allow_force_rerun=Fals
             "instead of @once.once_per_class or @once.once_per_instance"
         )
     fn_type = _wrapped_function_type(func)
-    once_factory = _once_factory(is_async=fn_type in _ASYNC_FN_TYPES, per_thread=per_thread, allow_force_rerun=allow_force_rerun)
+    once_factory = _once_factory(
+        is_async=fn_type in _ASYNC_FN_TYPES,
+        per_thread=per_thread,
+        allow_force_rerun=allow_force_rerun,
+    )
     return _wrap(func, once_factory, fn_type, retry_exceptions)
 
 
@@ -292,8 +311,15 @@ class once_per_class:  # pylint: disable=invalid-name
     is_staticmethod: bool
 
     @classmethod
-    def with_options(cls, per_thread: bool = False, retry_exceptions=False, allow_force_rerun=False):
-        return lambda func: cls(func, per_thread=per_thread, retry_exceptions=retry_exceptions, allow_force_rerun=allow_force_rerun)
+    def with_options(
+        cls, per_thread: bool = False, retry_exceptions=False, allow_force_rerun=False
+    ):
+        return lambda func: cls(
+            func,
+            per_thread=per_thread,
+            retry_exceptions=retry_exceptions,
+            allow_force_rerun=allow_force_rerun,
+        )
 
     def __init__(
         self,
@@ -305,7 +331,9 @@ class once_per_class:  # pylint: disable=invalid-name
         self.func = self._inspect_function(func)
         self.fn_type = _wrapped_function_type(self.func)
         self.once_factory = _once_factory(
-            is_async=self.fn_type in _ASYNC_FN_TYPES, per_thread=per_thread, allow_force_rerun=allow_force_rerun
+            is_async=self.fn_type in _ASYNC_FN_TYPES,
+            per_thread=per_thread,
+            allow_force_rerun=allow_force_rerun,
         )
         self.retry_exceptions = retry_exceptions
 
@@ -343,8 +371,12 @@ class once_per_instance:  # pylint: disable=invalid-name
     """A version of once for class methods which runs once per instance."""
 
     @classmethod
-    def with_options(cls, per_thread: bool = False, retry_exceptions=False, allow_force_rerun=False):
-        return lambda func: cls(func, per_thread=per_thread, retry_exceptions=retry_exceptions, allow_force_rerun=False)
+    def with_options(
+        cls, per_thread: bool = False, retry_exceptions=False, allow_force_rerun=False
+    ):
+        return lambda func: cls(
+            func, per_thread=per_thread, retry_exceptions=retry_exceptions, allow_force_rerun=False
+        )
 
     def __init__(
         self,
@@ -357,9 +389,9 @@ class once_per_instance:  # pylint: disable=invalid-name
         self.fn_type = _wrapped_function_type(self.func)
         self.is_async_fn = self.fn_type in _ASYNC_FN_TYPES
         self.callables_lock = threading.Lock()
-        self.callables: weakref.WeakKeyDictionary[
-            typing.Any, collections.abc.Callable
-        ] = weakref.WeakKeyDictionary()
+        self.callables: weakref.WeakKeyDictionary[typing.Any, collections.abc.Callable] = (
+            weakref.WeakKeyDictionary()
+        )
         self.per_thread = per_thread
         self.retry_exceptions = retry_exceptions
         self.allow_force_rerun = allow_force_rerun
@@ -369,7 +401,9 @@ class once_per_instance:  # pylint: disable=invalid-name
 
         A once factory factory if you will.
         """
-        return _once_factory(self.is_async_fn, per_thread=self.per_thread, allow_force_rerun=self.allow_force_rerun)
+        return _once_factory(
+            self.is_async_fn, per_thread=self.per_thread, allow_force_rerun=self.allow_force_rerun
+        )
 
     def _inspect_function(self, func: collections.abc.Callable):
         if isinstance(func, (classmethod, staticmethod)):

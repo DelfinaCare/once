@@ -1,4 +1,5 @@
 """Unit tests for once decorators."""
+
 # pylint: disable=missing-function-docstring
 import asyncio
 import collections.abc
@@ -384,9 +385,10 @@ class TestOnce(unittest.TestCase):
         func = once.once(functools.partial(lambda _: counter.get_incremented(), None))
         self.assertEqual(func(), 1)
         self.assertEqual(func(), 1)
-    
+
     def test_force_rerun(self):
         counter = Counter()
+
         @once.once(allow_force_rerun=True)
         def counting_fn():
             return counter.get_incremented()
@@ -395,7 +397,7 @@ class TestOnce(unittest.TestCase):
         self.assertEqual(counting_fn.force_rerun(), 2)
         self.assertEqual(counting_fn(), 2)
         self.assertEqual(counting_fn.force_rerun(), 3)
-    
+
     def test_force_rerun_not_allowed(self):
         counting_fn, counter = generate_once_counter_fn()
         self.assertEqual(counting_fn(None), 1)
@@ -996,6 +998,7 @@ class TestOnceAsync(unittest.IsolatedAsyncioTestCase):
 
     async def test_force_rerun(self):
         counter = Counter()
+
         @once.once(allow_force_rerun=True)
         async def counting_fn():
             return counter.get_incremented()
@@ -1006,6 +1009,7 @@ class TestOnceAsync(unittest.IsolatedAsyncioTestCase):
 
     async def test_force_rerun_not_allowed(self):
         counter = Counter()
+
         @once.once
         async def counting_fn():
             return counter.get_incremented()
@@ -1117,7 +1121,7 @@ class TestOnceAsync(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual([i async for i in async_yielding_iterator()], [1, 2, 3])
         self.assertEqual([i async for i in async_yielding_iterator()], [1, 2, 3])
-    
+
     async def test_iterator_force_rerun(self):
         counter = Counter()
 
@@ -1129,7 +1133,7 @@ class TestOnceAsync(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([i async for i in async_yielding_iterator()], [1, 2, 3])
         self.assertEqual([i async for i in async_yielding_iterator.force_rerun()], [4, 5, 6])
         self.assertEqual([i async for i in async_yielding_iterator()], [4, 5, 6])
-    
+
     async def test_iterator_force_rerun_not_allowed(self):
         counter = Counter()
 

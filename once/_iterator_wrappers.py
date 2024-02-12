@@ -64,7 +64,12 @@ class _GeneratorWrapperBase(abc.ABC):
     """
 
     def __init__(
-        self, reset_on_exception: bool, func: collections.abc.Callable, allow_force_rerun: bool = False, *args, **kwargs
+        self,
+        reset_on_exception: bool,
+        func: collections.abc.Callable,
+        allow_force_rerun: bool = False,
+        *args,
+        **kwargs,
     ) -> None:
         self.callable: collections.abc.Callable | None = functools.partial(func, *args, **kwargs)
         self.generator = self.callable()
