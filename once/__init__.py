@@ -202,7 +202,7 @@ def _wrap(
     # No need for the lock here since we're the only thread that could be running,
     # since we haven't even finished wrapping the func yet.
     if once_base.allow_force_rerun:
-        wrapped.force_rerun = functools.partial(wrapped, _once_force_rerun=True)
+        wrapped.force_rerun = functools.partial(wrapped, _once_force_rerun=True)  # type: ignore
     else:
 
         def force_rerun(*args, **kwargs):
@@ -214,7 +214,7 @@ def _wrap(
                 "Did you mean to add `allow_force_rerun=True` to your once.once() annotation?"
             )
 
-        wrapped.force_rerun = force_rerun
+        wrapped.force_rerun = force_rerun  # type: ignore
 
     functools.update_wrapper(wrapped, func)
     return wrapped
