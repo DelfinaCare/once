@@ -136,8 +136,7 @@ class _GeneratorWrapperBase(abc.ABC):
         self.generating = False
         self.generator = None  # Allow this to be GCed.
         if not self.allow_reset:
-            # Allow this to be GCed as long as we know we'll never
-            # need it again.
+            # Allow this to be GCed as long as we know we'll never need it again.
             self.callable = None
 
     def record_item(self, result: IteratorResults, item: typing.Any):
