@@ -52,7 +52,7 @@ def _wrapped_function_type(func: collections.abc.Callable) -> _WrappedFunctionTy
 
 
 class _OnceBase:
-    def __init__(self, is_async: bool, allow_force_rerun: bool = False) -> None:
+    def __init__(self, is_async: bool, allow_reset: bool = False) -> None:
         self.is_async = is_async
         # We are going to be extra pedantic about these next two variables only being read or set
         # with a lock by defining getters and setters which enforce that the lock is held. If this
@@ -61,7 +61,7 @@ class _OnceBase:
         # this is python :)
         self._called = False
         self._return_value: typing.Any = None
-        self.allow_force_rerun = allow_force_rerun
+        self.allow_reset = allow_reset
         if self.is_async:
             self.async_lock = asyncio.Lock()
         else:
@@ -122,7 +122,7 @@ def _wrap(
     wrapped: collections.abc.Callable
     if fn_type == _WrappedFunctionType.ASYNC_GENERATOR:
 
-        async def wrapped(*args, _once_force_rerun: bool = False, **kwargs) -> typing.Any:
+        async def wrapped(*args, **kwargs) -> typing.Any:
             once_base: _OnceBase = once_factory()
             async with once_base.async_lock:
                 if not once_base.called:
@@ -130,13 +130,13 @@ def _wrap(
                         retry_exceptions,
                         func,
                         *args,
-                        allow_force_rerun=once_base.allow_force_rerun,
+                        allow_reset=once_base.allow_reset,
                         **kwargs,
                     )
                     once_base.called = True
                 return_value = once_base.return_value
             next_value = None
-            iterator = return_value.yield_results(force_rerun=_once_force_rerun)
+            iterator = return_value.yield_results()
             while True:
                 try:
                     next_value = yield await iterator.asend(next_value)
@@ -145,10 +145,10 @@ def _wrap(
 
     elif fn_type == _WrappedFunctionType.ASYNC_FUNCTION:
 
-        async def wrapped(*args, _once_force_rerun: bool = False, **kwargs) -> typing.Any:
+        async def wrapped(*args, **kwargs) -> typing.Any:
             once_base: _OnceBase = once_factory()
             async with once_base.async_lock:
-                if not once_base.called or _once_force_rerun:
+                if not once_base.called:
                     try:
                         once_base.return_value = await func(*args, **kwargs)
                     except Exception as exception:
@@ -163,10 +163,10 @@ def _wrap(
 
     elif fn_type == _WrappedFunctionType.SYNC_FUNCTION:
 
-        def wrapped(*args, _once_force_rerun: bool = False, **kwargs) -> typing.Any:
+        def wrapped(*args, **kwargs) -> typing.Any:
             once_base: _OnceBase = once_factory()
             with once_base.lock:
-                if not once_base.called or _once_force_rerun:
+                if not once_base.called:
                     try:
                         once_base.return_value = func(*args, **kwargs)
                     except Exception as exception:
@@ -181,7 +181,7 @@ def _wrap(
 
     elif fn_type == _WrappedFunctionType.SYNC_GENERATOR:
 
-        def wrapped(*args, _once_force_rerun: bool = False, **kwargs) -> typing.Any:
+        def wrapped(*args, **kwargs) -> typing.Any:
             once_base: _OnceBase = once_factory()
             with once_base.lock:
                 if not once_base.called:
@@ -189,40 +189,65 @@ def _wrap(
                         retry_exceptions,
                         func,
                         *args,
-                        allow_force_rerun=once_base.allow_force_rerun,
+                        allow_reset=once_base.allow_reset,
                         **kwargs,
                     )
                     once_base.called = True
                 iterator = once_base.return_value
-            yield from iterator.yield_results(force_rerun=_once_force_rerun)
+            yield from iterator.yield_results()
 
     else:
         raise NotImplementedError()
-    once_base: _OnceBase = once_factory()
+
+    def reset():
+        once_base: _OnceBase = once_factory()
+        with once_base.lock:
+            if not once_base.called:
+                return
+            if fn_type == _WrappedFunctionType.SYNC_GENERATOR:
+                iterator = once_base.return_value
+                with iterator.lock:
+                    iterator.reset()
+            else:
+                once_base.called = False
+
+    async def async_reset():
+        once_base: _OnceBase = once_factory()
+        async with once_base.async_lock:
+            if not once_base.called:
+                return
+            if fn_type == _WrappedFunctionType.ASYNC_GENERATOR:
+                iterator = once_base.return_value
+                async with iterator.lock:
+                    iterator.reset()
+            else:
+                once_base.called = False
+
+    def not_allowed_reset():
+        # This doesn't need to be awaitable even in the async case because it will
+        # raise the error before an `await` has a chance to do anything.
+        raise RuntimeError(
+                f"reset() is not allowed to be called on onced function {func}.\n"
+                "Did you mean to add `allow_reset=True` to your once.once() annotation?"
+            )
     # No need for the lock here since we're the only thread that could be running,
     # since we haven't even finished wrapping the func yet.
-    if once_base.allow_force_rerun:
-        wrapped.force_rerun = functools.partial(wrapped, _once_force_rerun=True)  # type: ignore
+    once_base: _OnceBase = once_factory()
+    if not once_base.allow_reset:
+        wrapped.reset = not_allowed_reset  # type: ignore
     else:
-
-        def force_rerun(*args, **kwargs):
-            # This force_rerun won't necessarily have the right type, but it doesn't
-            # need to since it's an error case anyway. Just here for a more helpful
-            # error message.
-            raise RuntimeError(
-                f"force_rerun() is not allowed to be called on onced function {func}.\n"
-                "Did you mean to add `allow_force_rerun=True` to your once.once() annotation?"
-            )
-
-        wrapped.force_rerun = force_rerun  # type: ignore
+        if once_base.is_async:
+            wrapped.reset = async_reset
+        else:
+            wrapped.reset = reset
 
     functools.update_wrapper(wrapped, func)
     return wrapped
 
 
-def _once_factory(is_async: bool, per_thread: bool, allow_force_rerun: bool) -> _ONCE_FACTORY_TYPE:
+def _once_factory(is_async: bool, per_thread: bool, allow_reset: bool) -> _ONCE_FACTORY_TYPE:
     if not per_thread:
-        singleton_once = _OnceBase(is_async, allow_force_rerun=allow_force_rerun)
+        singleton_once = _OnceBase(is_async, allow_reset=allow_reset)
         return lambda: singleton_once
 
     per_thread_onces = threading.local()
@@ -233,14 +258,14 @@ def _once_factory(is_async: bool, per_thread: bool, allow_force_rerun: bool) -> 
         # itself!
         if once := getattr(per_thread_onces, "once", None):
             return once
-        per_thread_onces.once = _OnceBase(is_async, allow_force_rerun=allow_force_rerun)
+        per_thread_onces.once = _OnceBase(is_async, allow_reset=allow_reset)
         return per_thread_onces.once
 
     return _get_once_per_thread
 
 
 def once(
-    *args, per_thread=False, retry_exceptions=False, allow_force_rerun=False
+    *args, per_thread=False, retry_exceptions=False, allow_reset=False
 ) -> collections.abc.Callable:
     """Decorator to ensure a function is only called once.
 
@@ -270,11 +295,13 @@ def once(
         If true, exceptions in the onced function will allow the function to be
         called again. Otherwise, the exceptions are cached and re-raised on
         subsequent executions.
-    allow_force_rerun:
-        If true, the returned wrapped function will have a property
-        `.force_rerun(*args, **kwargs)` which will bypass the cache to force a
-        rerun of the underlying callable. The result of force_rerun will become
-        the new cached value for subsequent calls.
+    allow_reset:
+        If true, the returned wrapped function will have an attribute
+        `.reset(*args, **kwargs)` which will reset the cache to allow a
+        rerun of the underlying callable. This only resets the cache in the
+        same scope as it would have used otherwise, e.g. resetting a callable
+        wrapped in once_per_instance will reset the cache only for that instance,
+        once_per_thread only for that thread, etc.
     """
     if len(args) == 1:
         func: collections.abc.Callable = args[0]
@@ -288,7 +315,7 @@ def once(
             once,
             per_thread=per_thread,
             retry_exceptions=retry_exceptions,
-            allow_force_rerun=allow_force_rerun,
+            allow_reset=allow_reset,
         )
     if _is_method(func):
         raise SyntaxError(
@@ -299,7 +326,7 @@ def once(
     once_factory = _once_factory(
         is_async=fn_type in _ASYNC_FN_TYPES,
         per_thread=per_thread,
-        allow_force_rerun=allow_force_rerun,
+        allow_reset=allow_reset,
     )
     return _wrap(func, once_factory, fn_type, retry_exceptions)
 
@@ -312,13 +339,13 @@ class once_per_class:  # pylint: disable=invalid-name
 
     @classmethod
     def with_options(
-        cls, per_thread: bool = False, retry_exceptions=False, allow_force_rerun=False
+        cls, per_thread: bool = False, retry_exceptions=False, allow_reset=False
     ):
         return lambda func: cls(
             func,
             per_thread=per_thread,
             retry_exceptions=retry_exceptions,
-            allow_force_rerun=allow_force_rerun,
+            allow_reset=allow_reset,
         )
 
     def __init__(
@@ -326,14 +353,14 @@ class once_per_class:  # pylint: disable=invalid-name
         func: collections.abc.Callable,
         per_thread: bool = False,
         retry_exceptions: bool = False,
-        allow_force_rerun: bool = False,
+        allow_reset: bool = False,
     ) -> None:
         self.func = self._inspect_function(func)
         self.fn_type = _wrapped_function_type(self.func)
         self.once_factory = _once_factory(
             is_async=self.fn_type in _ASYNC_FN_TYPES,
             per_thread=per_thread,
-            allow_force_rerun=allow_force_rerun,
+            allow_reset=allow_reset,
         )
         self.retry_exceptions = retry_exceptions
 
@@ -372,10 +399,10 @@ class once_per_instance:  # pylint: disable=invalid-name
 
     @classmethod
     def with_options(
-        cls, per_thread: bool = False, retry_exceptions=False, allow_force_rerun=False
+        cls, per_thread: bool = False, retry_exceptions=False, allow_reset=False
     ):
         return lambda func: cls(
-            func, per_thread=per_thread, retry_exceptions=retry_exceptions, allow_force_rerun=False
+            func, per_thread=per_thread, retry_exceptions=retry_exceptions, allow_reset=False
         )
 
     def __init__(
@@ -383,7 +410,7 @@ class once_per_instance:  # pylint: disable=invalid-name
         func: collections.abc.Callable,
         per_thread: bool = False,
         retry_exceptions: bool = False,
-        allow_force_rerun: bool = False,
+        allow_reset: bool = False,
     ) -> None:
         self.func = self._inspect_function(func)
         self.fn_type = _wrapped_function_type(self.func)
@@ -394,7 +421,7 @@ class once_per_instance:  # pylint: disable=invalid-name
         )
         self.per_thread = per_thread
         self.retry_exceptions = retry_exceptions
-        self.allow_force_rerun = allow_force_rerun
+        self.allow_reset = allow_reset
 
     def once_factory(self) -> _ONCE_FACTORY_TYPE:
         """Generate a new once factory.
@@ -402,7 +429,7 @@ class once_per_instance:  # pylint: disable=invalid-name
         A once factory factory if you will.
         """
         return _once_factory(
-            self.is_async_fn, per_thread=self.per_thread, allow_force_rerun=self.allow_force_rerun
+            self.is_async_fn, per_thread=self.per_thread, allow_reset=self.allow_reset
         )
 
     def _inspect_function(self, func: collections.abc.Callable):

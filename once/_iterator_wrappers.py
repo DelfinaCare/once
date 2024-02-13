@@ -67,7 +67,7 @@ class _GeneratorWrapperBase(abc.ABC):
         self,
         reset_on_exception: bool,
         func: collections.abc.Callable,
-        allow_force_rerun: bool = False,
+        allow_reset: bool = False,
         *args,
         **kwargs,
     ) -> None:
@@ -76,7 +76,7 @@ class _GeneratorWrapperBase(abc.ABC):
         self.result = IteratorResults()
         self.generating = False
         self.reset_on_exception = reset_on_exception
-        self.allow_force_rerun = allow_force_rerun
+        self.allow_reset = allow_reset
 
     # Why do we make the generating boolean property abstract?
     # This makes the code when the iterator state is WAITING more efficient. If this was simply
@@ -135,7 +135,7 @@ class _GeneratorWrapperBase(abc.ABC):
         result.finished = True
         self.generating = False
         self.generator = None  # Allow this to be GCed.
-        if not self.allow_force_rerun:
+        if not self.allow_reset:
             # Allow this to be GCed as long as we know we'll never
             # need it again.
             self.callable = None
@@ -190,10 +190,8 @@ class AsyncGeneratorWrapper(_GeneratorWrapperBase):
         else:
             self.active_generation_completed.set()
 
-    async def yield_results(self, force_rerun: bool = False) -> collections.abc.AsyncGenerator:
+    async def yield_results(self) -> collections.abc.AsyncGenerator:
         async with self.lock:
-            if force_rerun:
-                self.reset()
             result = self.result
 
         i = 0
@@ -254,10 +252,8 @@ class GeneratorWrapper(_GeneratorWrapperBase):
         else:
             self.active_generation_completed.set()
 
-    def yield_results(self, force_rerun: bool = False) -> collections.abc.Generator:
+    def yield_results(self) -> collections.abc.Generator:
         with self.lock:
-            if force_rerun:
-                self.reset()
             result = self.result
         i = 0
         yield_value = None
