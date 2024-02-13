@@ -1,4 +1,5 @@
 """Unit tests for once decorators."""
+
 # pylint: disable=missing-function-docstring
 import asyncio
 import collections.abc
@@ -385,6 +386,26 @@ class TestOnce(unittest.TestCase):
         self.assertEqual(func(), 1)
         self.assertEqual(func(), 1)
 
+    def test_reset(self):
+        counter = Counter()
+
+        @once.once(allow_reset=True)
+        def counting_fn():
+            return counter.get_incremented()
+
+        self.assertEqual(counting_fn(), 1)
+        counting_fn.reset()
+        self.assertEqual(counting_fn(), 2)
+        counting_fn.reset()
+        counting_fn.reset()
+        self.assertEqual(counting_fn(), 3)
+
+    def test_reset_not_allowed(self):
+        counting_fn, counter = generate_once_counter_fn()
+        self.assertEqual(counting_fn(None), 1)
+        with self.assertRaises(RuntimeError):
+            counting_fn.reset()
+
     def test_failing_function(self):
         counter = Counter()
 
@@ -430,6 +451,32 @@ class TestOnce(unittest.TestCase):
 
         self.assertEqual(list(yielding_iterator()), [1, 2, 3])
         self.assertEqual(list(yielding_iterator()), [1, 2, 3])
+
+    def test_iterator_reset(self):
+        counter = Counter()
+
+        @once.once(allow_reset=True)
+        def yielding_iterator():
+            nonlocal counter
+            for _ in range(3):
+                yield counter.get_incremented()
+
+        self.assertEqual(list(yielding_iterator()), [1, 2, 3])
+        yielding_iterator.reset()
+        self.assertEqual(list(yielding_iterator()), [4, 5, 6])
+
+    def test_iterator_reset_not_allowed(self):
+        counter = Counter()
+
+        @once.once
+        def yielding_iterator():
+            nonlocal counter
+            for _ in range(3):
+                yield counter.get_incremented()
+
+        self.assertEqual(list(yielding_iterator()), [1, 2, 3])
+        with self.assertRaises(RuntimeError):
+            yielding_iterator.reset()
 
     def test_failing_generator(self):
         counter = Counter()
@@ -951,6 +998,28 @@ class TestOnceAsync(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await counting_fn2(), 2)
         self.assertEqual(await counting_fn2(), 2)
 
+    async def test_reset(self):
+        counter = Counter()
+
+        @once.once(allow_reset=True)
+        async def counting_fn():
+            return counter.get_incremented()
+
+        self.assertEqual(await counting_fn(), 1)
+        await counting_fn.reset()
+        self.assertEqual(await counting_fn(), 2)
+
+    async def test_reset_not_allowed(self):
+        counter = Counter()
+
+        @once.once
+        async def counting_fn():
+            return counter.get_incremented()
+
+        self.assertEqual(await counting_fn(), 1)
+        with self.assertRaises(RuntimeError):
+            await counting_fn.reset()
+
     async def test_once_per_thread(self):
         counter = Counter()
 
@@ -1054,6 +1123,30 @@ class TestOnceAsync(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual([i async for i in async_yielding_iterator()], [1, 2, 3])
         self.assertEqual([i async for i in async_yielding_iterator()], [1, 2, 3])
+
+    async def test_iterator_reset(self):
+        counter = Counter()
+
+        @once.once(allow_reset=True)
+        async def async_yielding_iterator():
+            for i in range(3):
+                yield counter.get_incremented()
+
+        self.assertEqual([i async for i in async_yielding_iterator()], [1, 2, 3])
+        await async_yielding_iterator.reset()
+        self.assertEqual([i async for i in async_yielding_iterator()], [4, 5, 6])
+
+    async def test_iterator_reset_not_allowed(self):
+        counter = Counter()
+
+        @once.once
+        async def async_yielding_iterator():
+            for i in range(3):
+                yield counter.get_incremented()
+
+        self.assertEqual([i async for i in async_yielding_iterator()], [1, 2, 3])
+        with self.assertRaises(RuntimeError):
+            async_yielding_iterator.reset()
 
     async def test_failing_generator(self):
         counter = Counter()

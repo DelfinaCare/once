@@ -64,13 +64,19 @@ class _GeneratorWrapperBase(abc.ABC):
     """
 
     def __init__(
-        self, reset_on_exception: bool, func: collections.abc.Callable, *args, **kwargs
+        self,
+        reset_on_exception: bool,
+        func: collections.abc.Callable,
+        allow_reset: bool = False,
+        *args,
+        **kwargs,
     ) -> None:
         self.callable: collections.abc.Callable | None = functools.partial(func, *args, **kwargs)
         self.generator = self.callable()
         self.result = IteratorResults()
         self.generating = False
         self.reset_on_exception = reset_on_exception
+        self.allow_reset = allow_reset
 
     # Why do we make the generating boolean property abstract?
     # This makes the code when the iterator state is WAITING more efficient. If this was simply
@@ -129,12 +135,20 @@ class _GeneratorWrapperBase(abc.ABC):
         result.finished = True
         self.generating = False
         self.generator = None  # Allow this to be GCed.
-        self.callable = None  # Allow this to be GCed.
+        if not self.allow_reset:
+            # Allow this to be GCed as long as we know we'll never need it again.
+            self.callable = None
 
     def record_item(self, result: IteratorResults, item: typing.Any):
         """Must be called with lock."""
         self.generating = False
         result.items.append(item)
+
+    def reset(self):
+        """Must be called with lock."""
+        self.result = IteratorResults()
+        assert self.callable is not None
+        self.generator = self.callable()  # Reset the iterator for the next call.
 
     def record_exception(self, result: IteratorResults, exception: Exception):
         """Must be called with lock."""
@@ -143,10 +157,8 @@ class _GeneratorWrapperBase(abc.ABC):
         # position every time the iterator is called.
         result.exception = exception
         self.generating = False
-        assert self.callable is not None
-        self.generator = self.callable()  # Reset the iterator for the next call.
         if self.reset_on_exception:
-            self.result = IteratorResults()
+            self.reset()
         else:
             self.generator = None  # allow this to be GCed
 
