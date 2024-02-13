@@ -238,9 +238,9 @@ def _wrap(
         wrapped.reset = not_allowed_reset  # type: ignore
     else:
         if once_base.is_async:
-            wrapped.reset = async_reset
+            wrapped.reset = async_reset  # type: ignore
         else:
-            wrapped.reset = reset
+            wrapped.reset = reset  # type: ignore
 
     functools.update_wrapper(wrapped, func)
     return wrapped
