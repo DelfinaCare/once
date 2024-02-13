@@ -227,9 +227,10 @@ def _wrap(
         # This doesn't need to be awaitable even in the async case because it will
         # raise the error before an `await` has a chance to do anything.
         raise RuntimeError(
-                f"reset() is not allowed to be called on onced function {func}.\n"
-                "Did you mean to add `allow_reset=True` to your once.once() annotation?"
-            )
+            f"reset() is not allowed to be called on onced function {func}.\n"
+            "Did you mean to add `allow_reset=True` to your once.once() annotation?"
+        )
+
     # No need for the lock here since we're the only thread that could be running,
     # since we haven't even finished wrapping the func yet.
     once_base: _OnceBase = once_factory()
@@ -338,9 +339,7 @@ class once_per_class:  # pylint: disable=invalid-name
     is_staticmethod: bool
 
     @classmethod
-    def with_options(
-        cls, per_thread: bool = False, retry_exceptions=False, allow_reset=False
-    ):
+    def with_options(cls, per_thread: bool = False, retry_exceptions=False, allow_reset=False):
         return lambda func: cls(
             func,
             per_thread=per_thread,
@@ -398,9 +397,7 @@ class once_per_instance:  # pylint: disable=invalid-name
     """A version of once for class methods which runs once per instance."""
 
     @classmethod
-    def with_options(
-        cls, per_thread: bool = False, retry_exceptions=False, allow_reset=False
-    ):
+    def with_options(cls, per_thread: bool = False, retry_exceptions=False, allow_reset=False):
         return lambda func: cls(
             func, per_thread=per_thread, retry_exceptions=retry_exceptions, allow_reset=False
         )
