@@ -1,6 +1,5 @@
 """Utility for initialization ensuring functions are called only once."""
 
-import abc
 import asyncio
 import collections.abc
 import enum
@@ -264,10 +263,10 @@ def _once_factory(is_async: bool, per_thread: bool, allow_reset: bool) -> _ONCE_
 
     return _get_once_per_thread
 
-
+F = typing.TypeVar('F', bound=typing.Callable)
 def once(
     *args, per_thread=False, retry_exceptions=False, allow_reset=False
-) -> collections.abc.Callable:
+) -> F:
     """Decorator to ensure a function is only called once.
 
     The restriction of only one call also holds across threads. However, this
