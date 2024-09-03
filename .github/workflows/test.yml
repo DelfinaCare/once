@@ -9,25 +9,35 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-20.04, windows-2019, macos-11]
-        python-version: ["3.8", "3.9", "3.10", "3.11", "3.12", "3.13.0-alpha.3", "pypy3.10", "pypy3.9"]
+        os: [ubuntu-24.04, windows-2022, macos-14]
+        python-version:
+          [
+            "3.8",
+            "3.9",
+            "3.10",
+            "3.11",
+            "3.12",
+            "3.13.0-rc.1",
+            "pypy3.10",
+            "pypy3.9",
+          ]
     steps:
-        - uses: actions/checkout@v4
-        - name: Set up Python ${{ matrix.python-version }}
-          uses: actions/setup-python@v5
-          with:
-            python-version: ${{ matrix.python-version }}
-            cache: pip
-        - run: pip install pytest
-        - run: pytest . --junitxml=junit/test_py${{ matrix.python-version }}_on_${{ matrix.os }}.xml
-        - run: python -O once_test.py
-        - run: python -OO once_test.py
-        - name: Upload pytest test results
-          uses: actions/upload-artifact@v4
-          if: success() || failure()
-          with:
-            name: test-py${{ matrix.python-version}}-on-${{ matrix.os }}
-            path: junit/test_py${{ matrix.python-version }}_on_${{ matrix.os }}.xml
+      - uses: actions/checkout@v4
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - run: pip install pytest
+      - run: pytest . --junitxml=junit/test_py${{ matrix.python-version }}_on_${{ matrix.os }}.xml
+      - run: python -O once_test.py
+      - run: python -OO once_test.py
+      - name: Upload pytest test results
+        uses: actions/upload-artifact@v4
+        if: success() || failure()
+        with:
+          name: test-py${{ matrix.python-version}}-on-${{ matrix.os }}
+          path: junit/test_py${{ matrix.python-version }}_on_${{ matrix.os }}.xml
 
   lint:
     runs-on: ubuntu-latest
