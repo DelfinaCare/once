@@ -34,5 +34,6 @@ classifiers = [
 ]
 
 [project.urls]
-"Homepage" = "https://github.com/DelfinaCare/once"
-"Bug Tracker" = "https://github.com/DelfinaCare/once/issues"
+Homepage = "https://github.com/DelfinaCare/once"
+Issues = "https://github.com/DelfinaCare/once/issues"
+Repository = "https://github.com/DelfinaCare/once.git"
