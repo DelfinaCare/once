@@ -98,11 +98,13 @@ class MyClass:
 ### `per_thread`
 This instantiates the function once per thread, and will return a thread-local
 result for each separate thread. This is extremely convenient for expensive
-objects which are not thread-safe.
+objects which are not thread-safe. Under the hood, this uses `threading.local`
+for its caching.
 
 ### `allow_reset`
 This exposes a `reset` method on the function, which will force the underlying
-function to be called again.
+function to be called again. The reset acts at the same scope as the underlying
+caching behavior, so a `per_thread` call will only act on that thread.
 ```python
 @once.once(allow_reset=True)
 def resettable_fn():
