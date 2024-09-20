@@ -882,6 +882,25 @@ class TestOnce(unittest.TestCase):
         self.assertEqual(min(results), 1)
         self.assertEqual(max(results), math.ceil(_N_WORKERS / 4))
 
+    def test_once_per_instance_property(self):
+        counter = Counter()
+
+        class _CallOnceClass:
+            @once.once_per_instance
+            @property
+            def value(self):
+                nonlocal counter
+                return counter.get_incremented()
+
+        a = _CallOnceClass()
+        b = _CallOnceClass()
+        self.assertEqual(a.value, 1)
+        self.assertEqual(b.value, 2)
+        self.assertEqual(a.value, 1)
+        self.assertEqual(b.value, 2)
+        self.assertEqual(_CallOnceClass().value, 3)
+        self.assertEqual(_CallOnceClass().value, 4)
+
     def test_once_per_class_classmethod(self):
         counter = Counter()
 
