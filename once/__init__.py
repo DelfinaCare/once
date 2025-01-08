@@ -12,6 +12,8 @@ import weakref
 
 from . import _iterator_wrappers
 
+from typing import ParamSpec
+
 
 def _is_method(func: collections.abc.Callable):
     """Determine if a function is a method on a class."""
@@ -29,6 +31,12 @@ class _WrappedFunctionType(enum.Enum):
 
 
 _ASYNC_FN_TYPES = (_WrappedFunctionType.ASYNC_FUNCTION, _WrappedFunctionType.ASYNC_GENERATOR)
+
+
+_P = ParamSpec("_P")
+
+
+_R = typing.TypeVar("_R")
 
 
 def _wrapped_function_type(func: collections.abc.Callable) -> _WrappedFunctionType:
@@ -99,11 +107,11 @@ class _CachedException:
 
 
 def _wrap(
-    func: collections.abc.Callable,
+    func: collections.abc.Callable[_P, _R],
     once_factory: _ONCE_FACTORY_TYPE,
     fn_type: _WrappedFunctionType,
     retry_exceptions: bool,
-) -> collections.abc.Callable:
+) -> collections.abc.Callable[_P, _R]:
     """Generate a wrapped function appropriate to the function type.
 
     The once_factory lets us reuse logic for both per-thread and singleton.
@@ -146,7 +154,7 @@ def _wrap(
             async with once_base.async_lock:
                 if not once_base.called:
                     try:
-                        once_base.return_value = await func(*args, **kwargs)
+                        once_base.return_value = await func(*args, **kwargs)  # type: ignore
                     except Exception as exception:
                         if retry_exceptions:
                             raise exception
@@ -262,8 +270,11 @@ def _once_factory(is_async: bool, per_thread: bool, allow_reset: bool) -> _ONCE_
 
 
 def once(
-    *args, per_thread=False, retry_exceptions=False, allow_reset=False
-) -> collections.abc.Callable:
+    *args: collections.abc.Callable[_P, _R],
+    per_thread=False,
+    retry_exceptions=False,
+    allow_reset=False,
+) -> collections.abc.Callable[_P, _R]:
     """Decorator to ensure a function is only called once.
 
     The restriction of only one call also holds across threads. However, this
@@ -308,11 +319,14 @@ def once(
         # This trick lets this function be a decorator directly, or be called
         # to create a decorator.
         # Both @once and @once() will function correctly.
-        return functools.partial(
-            once,
-            per_thread=per_thread,
-            retry_exceptions=retry_exceptions,
-            allow_reset=allow_reset,
+        return typing.cast(
+            collections.abc.Callable[_P, _R],
+            functools.partial(
+                once,
+                per_thread=per_thread,
+                retry_exceptions=retry_exceptions,
+                allow_reset=allow_reset,
+            ),
         )
     if _is_method(func):
         raise SyntaxError(
@@ -328,11 +342,12 @@ def once(
     return _wrap(func, once_factory, fn_type, retry_exceptions)
 
 
-class once_per_class:  # pylint: disable=invalid-name
+class once_per_class(typing.Generic[_P, _R]):  # pylint: disable=invalid-name
     """A version of once for class methods which runs once across all instances."""
 
     is_classmethod: bool
     is_staticmethod: bool
+    func: collections.abc.Callable[_P, _R]
 
     @classmethod
     def with_options(cls, per_thread: bool = False, retry_exceptions=False, allow_reset=False):
@@ -345,7 +360,7 @@ class once_per_class:  # pylint: disable=invalid-name
 
     def __init__(
         self,
-        func: collections.abc.Callable,
+        func: collections.abc.Callable[_P, _R],
         per_thread: bool = False,
         retry_exceptions: bool = False,
         allow_reset: bool = False,
@@ -359,7 +374,9 @@ class once_per_class:  # pylint: disable=invalid-name
         )
         self.retry_exceptions = retry_exceptions
 
-    def _inspect_function(self, func: collections.abc.Callable):
+    def _inspect_function(
+        self, func: collections.abc.Callable[_P, _R]
+    ) -> collections.abc.Callable[_P, _R]:
         if not _is_method(func):
             raise SyntaxError(
                 "Attempting to use @once.once_per_class method-only decorator "
@@ -379,20 +396,22 @@ class once_per_class:  # pylint: disable=invalid-name
 
     # This is needed for a decorator on a class method to return a
     # bound version of the function to the object or class.
-    def __get__(self, obj, cls) -> collections.abc.Callable:
+    def __get__(self, obj, cls) -> collections.abc.Callable[_P, _R]:
+        func = self.func
         if self.is_classmethod:
             func = functools.partial(self.func, cls)
-        elif self.is_staticmethod:
-            func = self.func
-        else:
+        elif not self.is_staticmethod:
             func = functools.partial(self.func, obj)
+
+        # Properly annotate the return type of _wrap to match Callable[P, R].
         return _wrap(func, self.once_factory, self.fn_type, self.retry_exceptions)
 
 
-class once_per_instance:  # pylint: disable=invalid-name
+class once_per_instance(typing.Generic[_P, _R]):  # pylint: disable=invalid-name
     """A version of once for class methods which runs once per instance."""
 
     is_property: bool
+    func: collections.abc.Callable[_P, _R]
 
     @classmethod
     def with_options(cls, per_thread: bool = False, retry_exceptions=False, allow_reset=False):
@@ -402,7 +421,7 @@ class once_per_instance:  # pylint: disable=invalid-name
 
     def __init__(
         self,
-        func: collections.abc.Callable,
+        func: collections.abc.Callable[_P, _R],
         per_thread: bool = False,
         retry_exceptions: bool = False,
         allow_reset: bool = False,
@@ -411,7 +430,7 @@ class once_per_instance:  # pylint: disable=invalid-name
         self.fn_type = _wrapped_function_type(self.func)
         self.is_async_fn = self.fn_type in _ASYNC_FN_TYPES
         self.callables_lock = threading.Lock()
-        self.callables: weakref.WeakKeyDictionary[typing.Any, collections.abc.Callable] = (
+        self.callables: weakref.WeakKeyDictionary[typing.Any, collections.abc.Callable[_P, _R]] = (
             weakref.WeakKeyDictionary()
         )
         self.per_thread = per_thread
@@ -427,7 +446,9 @@ class once_per_instance:  # pylint: disable=invalid-name
             self.is_async_fn, per_thread=self.per_thread, allow_reset=self.allow_reset
         )
 
-    def _inspect_function(self, func: collections.abc.Callable):
+    def _inspect_function(
+        self, func: collections.abc.Callable[_P, _R]
+    ) -> collections.abc.Callable[_P, _R]:
         if isinstance(func, (classmethod, staticmethod)):
             raise SyntaxError("Must use @once.once_per_class on classmethod and staticmethod")
         if isinstance(func, property):
@@ -444,7 +465,7 @@ class once_per_instance:  # pylint: disable=invalid-name
 
     # This is needed for a decorator on a class method to return a
     # bound version of the function to the object.
-    def __get__(self, obj, cls) -> collections.abc.Callable:
+    def __get__(self, obj, cls) -> collections.abc.Callable[_P, _R]:
         del cls
         if obj is None:
             # Requesting an unbound verion, so we return the function without
@@ -461,5 +482,5 @@ class once_per_instance:  # pylint: disable=invalid-name
                 )
                 self.callables[obj] = callable
         if self.is_property:
-            return callable()
+            return callable()  # type: ignore
         return callable
