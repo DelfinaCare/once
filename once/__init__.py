@@ -13,6 +13,11 @@ import weakref
 
 from . import _iterator_wrappers
 
+try:
+    from typing import ParamSpec
+except ImportError:
+    from typing_extensions import ParamSpec  # type: ignore
+
 
 def _is_method(func: collections.abc.Callable):
     """Determine if a function is a method on a class."""
@@ -32,7 +37,7 @@ class _WrappedFunctionType(enum.Enum):
 _ASYNC_FN_TYPES = (_WrappedFunctionType.ASYNC_FUNCTION, _WrappedFunctionType.ASYNC_GENERATOR)
 
 
-_P = typing.ParamSpec("_P")
+_P = ParamSpec("_P")
 
 
 _R = typing.TypeVar("_R")
@@ -156,7 +161,7 @@ def _wrap(
             async with once_base.async_lock:
                 if not once_base.called:
                     try:
-                        once_base.return_value = await func(*args, **kwargs)  # type: ignore 
+                        once_base.return_value = await func(*args, **kwargs)  # type: ignore
                     except Exception as exception:
                         if retry_exceptions:
                             raise exception
@@ -272,7 +277,10 @@ def _once_factory(is_async: bool, per_thread: bool, allow_reset: bool) -> _ONCE_
 
 
 def once(
-    *args: collections.abc.Callable[_P, _R], per_thread=False, retry_exceptions=False, allow_reset=False
+    *args: collections.abc.Callable[_P, _R],
+    per_thread=False,
+    retry_exceptions=False,
+    allow_reset=False,
 ) -> collections.abc.Callable[_P, _R]:
     """Decorator to ensure a function is only called once.
 
@@ -325,7 +333,7 @@ def once(
                 per_thread=per_thread,
                 retry_exceptions=retry_exceptions,
                 allow_reset=allow_reset,
-            )
+            ),
         )
     if _is_method(func):
         raise SyntaxError(
@@ -341,7 +349,7 @@ def once(
     return _wrap(func, once_factory, fn_type, retry_exceptions)
 
 
-class once_per_class(typing.Generic[_P, _R]): # pylint: disable=invalid-name
+class once_per_class(typing.Generic[_P, _R]):  # pylint: disable=invalid-name
     """A version of once for class methods which runs once across all instances."""
 
     is_classmethod: bool
@@ -373,7 +381,9 @@ class once_per_class(typing.Generic[_P, _R]): # pylint: disable=invalid-name
         )
         self.retry_exceptions = retry_exceptions
 
-    def _inspect_function(self, func: collections.abc.Callable[_P, _R]) -> collections.abc.Callable[_P, _R]:
+    def _inspect_function(
+        self, func: collections.abc.Callable[_P, _R]
+    ) -> collections.abc.Callable[_P, _R]:
         if not _is_method(func):
             raise SyntaxError(
                 "Attempting to use @once.once_per_class method-only decorator "
@@ -427,9 +437,9 @@ class once_per_instance(typing.Generic[_P, _R]):  # pylint: disable=invalid-name
         self.fn_type = _wrapped_function_type(self.func)
         self.is_async_fn = self.fn_type in _ASYNC_FN_TYPES
         self.callables_lock = threading.Lock()
-        self.callables: weakref.WeakKeyDictionary[
-            typing.Any, collections.abc.Callable[_P, _R]
-        ] = weakref.WeakKeyDictionary()
+        self.callables: weakref.WeakKeyDictionary[typing.Any, collections.abc.Callable[_P, _R]] = (
+            weakref.WeakKeyDictionary()
+        )
         self.per_thread = per_thread
         self.retry_exceptions = retry_exceptions
         self.allow_reset = allow_reset
@@ -443,7 +453,9 @@ class once_per_instance(typing.Generic[_P, _R]):  # pylint: disable=invalid-name
             self.is_async_fn, per_thread=self.per_thread, allow_reset=self.allow_reset
         )
 
-    def _inspect_function(self, func: collections.abc.Callable[_P, _R]) -> collections.abc.Callable[_P, _R]:
+    def _inspect_function(
+        self, func: collections.abc.Callable[_P, _R]
+    ) -> collections.abc.Callable[_P, _R]:
         if isinstance(func, (classmethod, staticmethod)):
             raise SyntaxError("Must use @once.once_per_class on classmethod and staticmethod")
         if isinstance(func, property):
