@@ -12,14 +12,11 @@ jobs:
         os: [ubuntu-24.04, windows-2022, macos-14]
         python-version:
           [
-            "3.8",
-            "3.9",
             "3.10",
             "3.11",
             "3.12",
             "3.13.0-rc.1",
             "pypy3.10",
-            "pypy3.9",
           ]
     steps:
       - uses: actions/checkout@v4

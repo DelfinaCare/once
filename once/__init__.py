@@ -13,11 +13,6 @@ import weakref
 
 from . import _iterator_wrappers
 
-try:
-    from typing import ParamSpec
-except ImportError:
-    from typing_extensions import ParamSpec  # type: ignore
-
 
 def _is_method(func: collections.abc.Callable):
     """Determine if a function is a method on a class."""
@@ -37,7 +32,7 @@ class _WrappedFunctionType(enum.Enum):
 _ASYNC_FN_TYPES = (_WrappedFunctionType.ASYNC_FUNCTION, _WrappedFunctionType.ASYNC_GENERATOR)
 
 
-_P = ParamSpec("_P")
+_P = typing.ParamSpec("_P")
 
 
 _R = typing.TypeVar("_R")
