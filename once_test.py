@@ -44,7 +44,7 @@ def parallel_map(
     # would be collections.abc.Iterable[tuple] | None on py >= 3.10
     call_args=None,
     n_threads: int = _N_WORKERS,
-    timeout: float = 20.0,
+    timeout: float = 60.0,
 ) -> list:
     """Run a function multiple times in parallel.
 
