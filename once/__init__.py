@@ -6,7 +6,6 @@ import collections.abc
 import enum
 import functools
 import inspect
-import sys
 import threading
 import typing
 import weakref
@@ -91,10 +90,7 @@ class _OnceBase:
         self._return_value = value
 
 
-if sys.version_info.minor > 8:
-    _ONCE_FACTORY_TYPE = collections.abc.Callable[[], _OnceBase]
-else:
-    _ONCE_FACTORY_TYPE = collections.abc.Callable  # type: ignore
+_ONCE_FACTORY_TYPE = collections.abc.Callable[[], _OnceBase]
 
 
 class _CachedException:

@@ -17,18 +17,6 @@ import weakref
 import once
 
 
-if sys.version_info.minor < 10:
-    print(f"Redefining anext for python 3.{sys.version_info.minor}")
-
-    async def anext(iter, default=StopAsyncIteration):
-        if default != StopAsyncIteration:
-            try:
-                return await iter.__anext__()
-            except StopAsyncIteration:
-                return default
-        return await iter.__anext__()
-
-
 # This is a "large" number of workers to schedule function calls in parallel.
 _N_WORKERS = 32
 
