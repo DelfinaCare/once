@@ -446,6 +446,13 @@ class once_per_instance:  # pylint: disable=invalid-name
     # bound version of the function to the object.
     def __get__(self, obj, cls) -> collections.abc.Callable:
         del cls
+        if obj is None:
+            # Requesting an unbound verion, so we return the function without
+            # an object bound. The weakref lookup below would fail anyways,
+            # and this will at least allow inspection of the function.
+            # TODO: Give a better error message if the returned function is
+            # called.
+            return self.func
         with self.callables_lock:
             if (callable := self.callables.get(obj)) is None:
                 bound_func = functools.partial(self.func, obj)

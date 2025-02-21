@@ -14,6 +14,8 @@ import unittest
 import uuid
 import weakref
 
+# import typing_extensions
+
 import once
 
 
@@ -671,13 +673,14 @@ class TestOnce(unittest.TestCase):
         gc.collect()
         self.assertIsNone(ephemeral_ref())
 
-    def test_function_signature_preserved(self):
+    def test_function_signature_preserved(self) -> None:
         def type_annotated_fn(arg: float) -> int:
             """Very descriptive docstring."""
             del arg
             return 1
 
         decorated_function = once.once(type_annotated_fn)
+        # typing_extensions.assert_type(decorated_function(1.0), int)
         original_sig = inspect.signature(type_annotated_fn)
         decorated_sig = inspect.signature(decorated_function)
         self.assertIs(original_sig.parameters["arg"].annotation, float)
@@ -688,6 +691,34 @@ class TestOnce(unittest.TestCase):
         if sys.flags.optimize >= 2:
             self.skipTest("docstrings get stripped with -OO")
         self.assertEqual(inspect.getdoc(type_annotated_fn), "Very descriptive docstring.")
+
+    @unittest.skip("Work In Progress")
+    def test_methods_signature_preserved(self) -> None:
+        class SampleClass:
+            @once.once_per_class
+            def once_per_class_fn(self, arg: float) -> int:
+                """Very descriptive docstring."""
+                del arg
+                return 1
+
+            @once.once_per_instance
+            def once_per_instance_fn(self, arg: float) -> int:
+                """Very descriptive docstring."""
+                del arg
+                return 1
+
+        # typing_extensions.assert_type(SampleClass.once_per_class_fn(1.0), int)
+        # typing_extensions.assert_type(SampleClass().once_per_instance_fn(1.0), int)
+
+        for fn in (SampleClass.once_per_class_fn, SampleClass.once_per_instance_fn):
+            with self.subTest(msg=fn.__name__):
+                signature = inspect.signature(fn)
+                self.assertIs(signature.parameters["arg"].annotation, float)
+                self.assertIs(signature.return_annotation, int)
+                if sys.flags.optimize >= 2:
+                    self.skipTest("docstrings get stripped with -OO")
+                else:
+                    self.assertEqual(inspect.getdoc(fn), "Very descriptive docstring.")
 
     def test_once_per_class(self):
         class _CallOnceClass(Counter):
