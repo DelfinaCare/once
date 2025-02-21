@@ -19,6 +19,12 @@ import once
 
 # This is a "large" number of workers to schedule function calls in parallel.
 _N_WORKERS = 32
+# The default is for thread switching to occur every 5ms. Because most of the
+# threads in these tests are worst-case stress tests that have very little to
+# do and are often blocked, we set the threads to switch a bit quicker just so
+# tests can go a bit quicker.
+if sys.getswitchinterval() > 0.0001:
+    sys.setswitchinterval(0.0001)
 
 
 class WrappedException:
@@ -103,11 +109,13 @@ class Counter:
         self.value = 0
         self.ready = threading.Event()
         self.ready.set()
+        self._lock = threading.Lock()
 
     def get_incremented(self) -> int:
         self.ready.wait()
-        self.value += 1
-        return self.value
+        with self._lock:
+            self.value += 1
+            return self.value
 
 
 def execute_with_barrier(*args, n_workers=None, is_async=False):
@@ -834,9 +842,9 @@ class TestOnce(unittest.TestCase):
             b_job = executor.submit(b.run)
             # The b_job will deadlock and this will fail if different
             # object executions block each other.
-            self.assertEqual(b_job.result(timeout=5), 1)
+            self.assertEqual(b_job.result(timeout=15), 1)
             a.counter.ready.set()
-            self.assertEqual(a_job.result(timeout=5), 1)
+            self.assertEqual(a_job.result(timeout=15), 1)
 
     def test_once_per_instance_parallel(self):
         class _CallOnceClass(Counter):
