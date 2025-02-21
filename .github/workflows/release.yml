@@ -27,10 +27,10 @@ jobs:
   upload_wheel_test:
     needs: [build_wheel]
     runs-on: ubuntu-latest
-    if: github.repository_owner == 'DelfinaCare'
+    if: github.repository_owner == 'DelfinaCare' && github.ref == 'refs/heads/main'
     environment:
         name: pypi-test
-        url: https://pypi.org/p/once-py
+        url: https://test.pypi.org/p/once-py
     permissions:
       id-token: write
     steps:
