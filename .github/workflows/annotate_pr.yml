@@ -31,7 +31,7 @@ jobs:
             ]
     steps:
       - name: Test Report
-        uses: dorny/test-reporter@v1
+        uses: dorny/test-reporter@v2
         with:
           name: test-py${{ matrix.python-version}}-on-${{ matrix.os }}
           reporter: java-junit
