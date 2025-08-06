@@ -27,7 +27,7 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
-      - run: pip install pytest
+      - run: pip install pytest typing-extensions
       - run: pytest . --junitxml=junit/test_py${{ matrix.python-version }}_on_${{ matrix.os }}.xml
       - run: python -O once_test.py
       - run: python -OO once_test.py
@@ -53,5 +53,5 @@ jobs:
           python-version: 3.13
           cache: pip
       - run: |
-          pip install mypy
+          pip install mypy typing-extensions
           mypy .
