@@ -247,7 +247,7 @@ def _wrap(
             wrapped.reset = reset  # type: ignore
 
     functools.update_wrapper(wrapped, func)
-    return wrapped
+    return wrapped  # type: ignore
 
 
 def _once_factory(is_async: bool, per_thread: bool, allow_reset: bool) -> _ONCE_FACTORY_TYPE:
