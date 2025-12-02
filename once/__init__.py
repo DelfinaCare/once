@@ -269,6 +269,18 @@ def _once_factory(is_async: bool, per_thread: bool, allow_reset: bool) -> _ONCE_
     return _get_once_per_thread
 
 
+@typing.overload
+def once(func: collections.abc.Callable[_P, _R], /) -> collections.abc.Callable[_P, _R]: ...
+
+
+@typing.overload
+def once(
+    *, per_thread: bool = False, retry_exceptions: bool = False, allow_reset: bool = False
+) -> collections.abc.Callable[
+    [collections.abc.Callable[_P, _R]], collections.abc.Callable[_P, _R]
+]: ...
+
+
 def once(
     *args: collections.abc.Callable[_P, _R],
     per_thread=False,
