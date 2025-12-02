@@ -21,7 +21,7 @@ line-length = 100
 name = "once-py"
 dynamic = ["version"]
 authors = [
-  { name="Ali.Ebrahim", email="ali@delfina.com" },
+  { name = "DelfinaCare", email = "open-source@delfina.com" }
 ]
 description = "Utility for initialization ensuring functions are called only once"
 readme = "README.md"
