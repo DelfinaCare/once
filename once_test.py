@@ -353,7 +353,7 @@ class TestFunctionInspection(unittest.TestCase):
 class TestOnce(unittest.TestCase):
     """Unit tests for once decorators."""
 
-    def test_inspect_iterator(self):
+    def test_inspect_iterator(self) -> None:
         @once.once
         def yielding_iterator():
             for i in range(3):
@@ -361,7 +361,7 @@ class TestOnce(unittest.TestCase):
 
         self.assertTrue(inspect.isgeneratorfunction(yielding_iterator))
 
-    def test_counter_works(self):
+    def test_counter_works(self) -> None:
         """Ensure the counter text fixture works."""
         counter = Counter()
         self.assertEqual(counter.value, 0)
@@ -370,7 +370,7 @@ class TestOnce(unittest.TestCase):
         self.assertEqual(counter.get_incremented(), 2)
         self.assertEqual(counter.value, 2)
 
-    def test_different_args_same_result(self):
+    def test_different_args_same_result(self) -> None:
         counting_fn, counter = generate_once_counter_fn()
         self.assertEqual(counting_fn(1), 1)
         self.assertEqual(counter.value, 1)
@@ -378,7 +378,7 @@ class TestOnce(unittest.TestCase):
         self.assertEqual(counting_fn(2), 1)
         self.assertEqual(counter.value, 1)
 
-    def test_partial(self):
+    def test_partial(self) -> None:
         counter = Counter()
         func = once.once(functools.partial(lambda _: counter.get_incremented(), None))
         self.assertEqual(func(), 1)
@@ -404,7 +404,7 @@ class TestOnce(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             counting_fn.reset()
 
-    def test_failing_function(self):
+    def test_failing_function(self) -> None:
         counter = Counter()
 
         @once.once
@@ -420,7 +420,7 @@ class TestOnce(unittest.TestCase):
             sample_failing_fn()
         self.assertEqual(counter.get_incremented(), 3, "Function call incremented the counter")
 
-    def test_failing_function_retry_exceptions(self):
+    def test_failing_function_retry_exceptions(self) -> None:
         counter = Counter()
 
         @once.once(retry_exceptions=True)
@@ -438,7 +438,7 @@ class TestOnce(unittest.TestCase):
         self.assertEqual(counter.get_incremented(), 4)
         self.assertEqual(sample_failing_fn(), 1)
 
-    def test_iterator(self):
+    def test_iterator(self) -> None:
         counter = Counter()
 
         @once.once
@@ -476,7 +476,7 @@ class TestOnce(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             yielding_iterator.reset()
 
-    def test_failing_generator(self):
+    def test_failing_generator(self) -> None:
         counter = Counter()
 
         @once.once
@@ -510,7 +510,7 @@ class TestOnce(unittest.TestCase):
         with self.assertRaises(ValueError):
             next(call4)
 
-    def test_failing_generator_retry_exceptions(self):
+    def test_failing_generator_retry_exceptions(self) -> None:
         counter = Counter()
 
         @once.once(retry_exceptions=True)
@@ -541,7 +541,7 @@ class TestOnce(unittest.TestCase):
         self.assertEqual(list(sample_failing_fn()), [3, 4])
         self.assertEqual(list(sample_failing_fn()), [3, 4])
 
-    def test_iterator_parallel_execution(self):
+    def test_iterator_parallel_execution(self) -> None:
         counter = Counter()
 
         @once.once
@@ -558,7 +558,7 @@ class TestOnce(unittest.TestCase):
         for result in results:
             self.assertEqual(result, [1, 2, 3])
 
-    def test_iterator_lock_not_held_during_evaluation(self):
+    def test_iterator_lock_not_held_during_evaluation(self) -> None:
         counter = Counter()
 
         @once.once
@@ -584,7 +584,7 @@ class TestOnce(unittest.TestCase):
             self.assertEqual(gen1_updater.result(), 2)
             self.assertEqual(gen2_updater.result(), 2)
 
-    def test_threaded_single_function(self):
+    def test_threaded_single_function(self) -> None:
         counting_fn, counter = generate_once_counter_fn()
         results = parallel_map(self, counting_fn)
         self.assertEqual(len(results), _N_WORKERS)
@@ -592,7 +592,7 @@ class TestOnce(unittest.TestCase):
             self.assertEqual(r, 1)
         self.assertEqual(counter.value, 1)
 
-    def test_once_per_thread(self):
+    def test_once_per_thread(self) -> None:
         counter = Counter()
 
         @once.once(per_thread=True)
@@ -607,7 +607,7 @@ class TestOnce(unittest.TestCase):
         self.assertEqual(min(results), 1)
         self.assertEqual(max(results), _N_WORKERS)
 
-    def test_threaded_multiple_functions(self):
+    def test_threaded_multiple_functions(self) -> None:
         counters = []
         fns = []
 
@@ -624,7 +624,7 @@ class TestOnce(unittest.TestCase):
         for counter in counters:
             self.assertEqual(counter.value, 1)
 
-    def test_different_fn_do_not_deadlock(self):
+    def test_different_fn_do_not_deadlock(self) -> None:
         """Ensure different functions use different locks to avoid deadlock."""
 
         fn1_called = threading.Event()
@@ -648,7 +648,7 @@ class TestOnce(unittest.TestCase):
             fn2()
             fn1_promise.result()
 
-    def test_closure_gc(self):
+    def test_closure_gc(self) -> None:
         """Tests that closure function is not cached indefinitely"""
 
         class EphemeralObject:
@@ -714,7 +714,7 @@ class TestOnce(unittest.TestCase):
         self.assertEqual(b.once_fn(), 1)
         self.assertEqual(b.once_fn(), 1)
 
-    def test_once_per_class_parallel(self):
+    def test_once_per_class_parallel(self) -> None:
         class _CallOnceClass(Counter):
             @once.once_per_class
             def once_fn(self):
@@ -729,7 +729,7 @@ class TestOnce(unittest.TestCase):
         self.assertEqual(min(results), 1)
         self.assertEqual(max(results), 1)
 
-    def test_once_per_class_per_thread(self):
+    def test_once_per_class_per_thread(self) -> None:
         class _CallOnceClass(Counter):
             @once.once_per_class.with_options(per_thread=True)
             @execute_with_barrier(n_workers=_N_WORKERS)
@@ -849,7 +849,7 @@ class TestOnce(unittest.TestCase):
             a.counter.ready.set()
             self.assertEqual(a_job.result(timeout=15), 1)
 
-    def test_once_per_instance_parallel(self):
+    def test_once_per_instance_parallel(self) -> None:
         class _CallOnceClass(Counter):
             @once.once_per_instance
             @execute_with_barrier(n_workers=4)
@@ -865,7 +865,7 @@ class TestOnce(unittest.TestCase):
         self.assertEqual(min(results), 1)
         self.assertEqual(max(results), 1)
 
-    def test_once_per_instance_per_thread(self):
+    def test_once_per_instance_per_thread(self) -> None:
         class _CallOnceClass(Counter):
             @once.once_per_instance.with_options(per_thread=True)
             @execute_with_barrier(n_workers=_N_WORKERS)
@@ -913,7 +913,7 @@ class TestOnce(unittest.TestCase):
         self.assertEqual(_CallOnceClass.value(), 1)
         self.assertEqual(_CallOnceClass.value(), 1)
 
-    def test_once_per_class_staticmethod(self):
+    def test_once_per_class_staticmethod(self) -> None:
         counter = Counter()
 
         class _CallOnceClass:
@@ -926,7 +926,7 @@ class TestOnce(unittest.TestCase):
         self.assertEqual(_CallOnceClass.value(), 1)
         self.assertEqual(_CallOnceClass.value(), 1)
 
-    def test_receiving_iterator(self):
+    def test_receiving_iterator(self) -> None:
         @once.once
         def receiving_iterator():
             next = yield 0
@@ -947,7 +947,7 @@ class TestOnce(unittest.TestCase):
         self.assertEqual(next(gen_1, None), None)
         self.assertEqual(list(receiving_iterator()), [0, 1, 2, 5])
 
-    def test_receiving_iterator_parallel_execution(self):
+    def test_receiving_iterator_parallel_execution(self) -> None:
         @once.once
         def receiving_iterator():
             next = yield 0
@@ -969,7 +969,7 @@ class TestOnce(unittest.TestCase):
         for result in results:
             self.assertEqual(result, list(range(_N_WORKERS * 4)))
 
-    def test_receiving_iterator_parallel_execution_halting(self):
+    def test_receiving_iterator_parallel_execution_halting(self) -> None:
         @once.once
         def receiving_iterator():
             next = yield 0
@@ -996,7 +996,7 @@ class TestOnce(unittest.TestCase):
 
 
 class TestOnceAsync(unittest.IsolatedAsyncioTestCase):
-    async def test_fn_called_once(self):
+    async def test_fn_called_once(self) -> None:
         counter1 = Counter()
 
         @once.once
@@ -1038,7 +1038,7 @@ class TestOnceAsync(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(RuntimeError):
             await counting_fn.reset()
 
-    async def test_once_per_thread(self):
+    async def test_once_per_thread(self) -> None:
         counter = Counter()
 
         @once.once(per_thread=True)
@@ -1063,7 +1063,7 @@ class TestOnceAsync(unittest.IsolatedAsyncioTestCase):
 
         parallel_map(self, execute)
 
-    async def test_failing_function(self):
+    async def test_failing_function(self) -> None:
         counter = Counter()
 
         @once.once
@@ -1079,7 +1079,7 @@ class TestOnceAsync(unittest.IsolatedAsyncioTestCase):
             await sample_failing_fn()
         self.assertEqual(counter.get_incremented(), 3, "Function call incremented the counter")
 
-    async def test_failing_function_retry_exceptions(self):
+    async def test_failing_function_retry_exceptions(self) -> None:
         counter = Counter()
 
         @once.once(retry_exceptions=True)
@@ -1097,7 +1097,7 @@ class TestOnceAsync(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(counter.get_incremented(), 4)
         self.assertEqual(await sample_failing_fn(), 1)
 
-    async def test_inspect_func(self):
+    async def test_inspect_func(self) -> None:
         @once.once
         async def async_func():
             return True
@@ -1113,7 +1113,7 @@ class TestOnceAsync(unittest.IsolatedAsyncioTestCase):
         # Just for cleanup.
         await coroutine
 
-    async def test_inspect_iterator(self):
+    async def test_inspect_iterator(self) -> None:
         @once.once
         async def async_yielding_iterator():
             for i in range(3):
@@ -1131,7 +1131,7 @@ class TestOnceAsync(unittest.IsolatedAsyncioTestCase):
         async for i in coroutine:
             pass
 
-    async def test_iterator(self):
+    async def test_iterator(self) -> None:
         counter = Counter()
 
         @once.once
@@ -1166,7 +1166,7 @@ class TestOnceAsync(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(RuntimeError):
             async_yielding_iterator.reset()
 
-    async def test_failing_generator(self):
+    async def test_failing_generator(self) -> None:
         counter = Counter()
 
         @once.once
@@ -1200,7 +1200,7 @@ class TestOnceAsync(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ValueError):
             await anext(call4)
 
-    async def test_failing_generator_retry_exceptions(self):
+    async def test_failing_generator_retry_exceptions(self) -> None:
         counter = Counter()
 
         @once.once(retry_exceptions=True)
@@ -1231,7 +1231,7 @@ class TestOnceAsync(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([i async for i in sample_failing_fn()], [3, 4])
         self.assertEqual([i async for i in sample_failing_fn()], [3, 4])
 
-    async def test_iterator_is_lazily_evaluted(self):
+    async def test_iterator_is_lazily_evaluted(self) -> None:
         counter = Counter()
 
         @once.once
@@ -1257,7 +1257,7 @@ class TestOnceAsync(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await anext(gen_1), 3)
         self.assertEqual(await anext(gen_2, None), None)
 
-    async def test_receiving_iterator(self):
+    async def test_receiving_iterator(self) -> None:
         @once.once
         async def async_receiving_iterator():
             next = yield 0
@@ -1278,7 +1278,7 @@ class TestOnceAsync(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await anext(gen_1, None), None)
         self.assertEqual([i async for i in async_receiving_iterator()], [0, 1, 2, 5])
 
-    async def test_receiving_iterator_parallel_execution(self):
+    async def test_receiving_iterator_parallel_execution(self) -> None:
         @once.once
         async def receiving_iterator():
             next = yield 0
@@ -1297,7 +1297,7 @@ class TestOnceAsync(unittest.IsolatedAsyncioTestCase):
         for result in results:
             self.assertEqual(await result, list(range(_N_WORKERS)))
 
-    async def test_receiving_iterator_parallel_execution_halting(self):
+    async def test_receiving_iterator_parallel_execution_halting(self) -> None:
         @once.once
         async def receiving_iterator():
             next = yield 0
@@ -1318,7 +1318,7 @@ class TestOnceAsync(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(await result, list(range(i + 1)))
 
     @unittest.skipIf(not hasattr(asyncio, "Barrier"), "Requires Barrier to evaluate")
-    async def test_iterator_lock_not_held_during_evaluation(self):
+    async def test_iterator_lock_not_held_during_evaluation(self) -> None:
         counter = Counter()
 
         @once.once
@@ -1381,7 +1381,7 @@ class TestOnceAsync(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await _CallOnceClass.value(), 1)
         self.assertEqual(await _CallOnceClass.value(), 1)
 
-    async def test_once_per_class_staticmethod(self):
+    async def test_once_per_class_staticmethod(self) -> None:
         counter = Counter()
 
         class _CallOnceClass:
