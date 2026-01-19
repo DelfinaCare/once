@@ -4,12 +4,14 @@
 import asyncio
 import collections.abc
 import concurrent.futures
+import contextlib
 import functools
 import gc
 import inspect
 import math
 import sys
 import threading
+import traceback
 import unittest
 import uuid
 import weakref
@@ -187,6 +189,41 @@ def generate_once_counter_fn():
         return counter.get_incremented()
 
     return counting_fn, counter
+
+
+class LineCapture:
+    def __init__(self):
+        self.line = None
+
+    def record_next_line(self):
+        """Record the next line in the parent frame"""
+        self.line = inspect.currentframe().f_back.f_lineno + 1
+
+
+class ExceptionContextManager:
+    exception: Exception
+
+
+@contextlib.contextmanager
+def assertRaisesWithLineInStackTrace(test: unittest.TestCase, exception_type, line: LineCapture):
+    try:
+        container = ExceptionContextManager()
+        yield container
+    except exception_type as exception:
+        container.exception = exception
+        traceback_exception = traceback.TracebackException.from_exception(exception)
+        if not len(traceback_exception.stack):
+            test.fail("Exception stack not preserved. Did you use the raw assertRaises by mistake?")
+        locations = [(frame.filename, frame.lineno) for frame in traceback_exception.stack]
+        line_number = line.line
+        error_message = [
+            f"Traceback for exception {repr(exception)} did not have frame on line {line_number}. Exception below\n"
+        ]
+        error_message.extend(traceback_exception.format())
+        test.assertIn((__file__, line_number), locations, msg="".join(error_message))
+
+    else:
+        test.fail("expected exception not called")
 
 
 class TestFunctionInspection(unittest.TestCase):
@@ -406,33 +443,42 @@ class TestOnce(unittest.TestCase):
 
     def test_failing_function(self) -> None:
         counter = Counter()
+        failing_line = LineCapture()
 
         @once.once
         def sample_failing_fn():
+            nonlocal failing_line
             if counter.get_incremented() < 4:
+                failing_line.record_next_line()
                 raise ValueError("expected failure")
             return 1
 
-        with self.assertRaises(ValueError):
+        with assertRaisesWithLineInStackTrace(self, ValueError, failing_line):
             sample_failing_fn()
+        with assertRaisesWithLineInStackTrace(self, ValueError, failing_line) as cm:
+            sample_failing_fn()
+        self.assertEqual(cm.exception.args[0], "expected failure")
         self.assertEqual(counter.get_incremented(), 2)
-        with self.assertRaises(ValueError):
+        with assertRaisesWithLineInStackTrace(self, ValueError, failing_line):
             sample_failing_fn()
         self.assertEqual(counter.get_incremented(), 3, "Function call incremented the counter")
 
     def test_failing_function_retry_exceptions(self) -> None:
         counter = Counter()
+        failing_line = LineCapture()
 
         @once.once(retry_exceptions=True)
         def sample_failing_fn():
+            nonlocal failing_line
             if counter.get_incremented() < 4:
+                failing_line.record_next_line()
                 raise ValueError("expected failure")
             return 1
 
-        with self.assertRaises(ValueError):
+        with assertRaisesWithLineInStackTrace(self, ValueError, failing_line):
             sample_failing_fn()
         self.assertEqual(counter.get_incremented(), 2)
-        with self.assertRaises(ValueError):
+        with assertRaisesWithLineInStackTrace(self, ValueError, failing_line):
             sample_failing_fn()
         # This ensures that this was a new function call, not a cached result.
         self.assertEqual(counter.get_incremented(), 4)
@@ -478,6 +524,7 @@ class TestOnce(unittest.TestCase):
 
     def test_failing_generator(self) -> None:
         counter = Counter()
+        failing_line = LineCapture()
 
         @once.once
         def sample_failing_fn():
@@ -485,6 +532,7 @@ class TestOnce(unittest.TestCase):
             result = counter.get_incremented()
             yield result
             if result == 2:
+                failing_line.record_next_line()
                 raise ValueError("expected failure after 2.")
 
         # Both of these calls should return the same results.
@@ -494,9 +542,9 @@ class TestOnce(unittest.TestCase):
         self.assertEqual(next(call2), 1)
         self.assertEqual(next(call1), 2)
         self.assertEqual(next(call2), 2)
-        with self.assertRaises(ValueError):
+        with assertRaisesWithLineInStackTrace(self, ValueError, failing_line):
             next(call1)
-        with self.assertRaises(ValueError):
+        with assertRaisesWithLineInStackTrace(self, ValueError, failing_line):
             next(call2)
         # These next 2 calls should also fail.
         call3 = sample_failing_fn()
@@ -505,13 +553,14 @@ class TestOnce(unittest.TestCase):
         self.assertEqual(next(call4), 1)
         self.assertEqual(next(call3), 2)
         self.assertEqual(next(call4), 2)
-        with self.assertRaises(ValueError):
+        with assertRaisesWithLineInStackTrace(self, ValueError, failing_line):
             next(call3)
-        with self.assertRaises(ValueError):
+        with assertRaisesWithLineInStackTrace(self, ValueError, failing_line):
             next(call4)
 
     def test_failing_generator_retry_exceptions(self) -> None:
         counter = Counter()
+        failing_line = LineCapture()
 
         @once.once(retry_exceptions=True)
         def sample_failing_fn():
@@ -519,6 +568,7 @@ class TestOnce(unittest.TestCase):
             result = counter.get_incremented()
             yield result
             if result == 2:
+                failing_line.record_next_line()
                 raise ValueError("expected failure after 2.")
 
         # Both of these calls should return the same results.
@@ -528,9 +578,9 @@ class TestOnce(unittest.TestCase):
         self.assertEqual(next(call2), 1)
         self.assertEqual(next(call1), 2)
         self.assertEqual(next(call2), 2)
-        with self.assertRaises(ValueError):
+        with assertRaisesWithLineInStackTrace(self, ValueError, failing_line):
             next(call1)
-        with self.assertRaises(ValueError):
+        with assertRaisesWithLineInStackTrace(self, ValueError, failing_line):
             next(call2)
         # These next 2 calls should succeed.
         call3 = sample_failing_fn()
@@ -1065,33 +1115,37 @@ class TestOnceAsync(unittest.IsolatedAsyncioTestCase):
 
     async def test_failing_function(self) -> None:
         counter = Counter()
+        failing_line = LineCapture()
 
         @once.once
         async def sample_failing_fn():
             if counter.get_incremented() < 4:
+                failing_line.record_next_line()
                 raise ValueError("expected failure")
             return 1
 
-        with self.assertRaises(ValueError):
+        with assertRaisesWithLineInStackTrace(self, ValueError, failing_line):
             await sample_failing_fn()
         self.assertEqual(counter.get_incremented(), 2)
-        with self.assertRaises(ValueError):
+        with assertRaisesWithLineInStackTrace(self, ValueError, failing_line):
             await sample_failing_fn()
         self.assertEqual(counter.get_incremented(), 3, "Function call incremented the counter")
 
     async def test_failing_function_retry_exceptions(self) -> None:
         counter = Counter()
+        failing_line = LineCapture()
 
         @once.once(retry_exceptions=True)
         async def sample_failing_fn():
             if counter.get_incremented() < 4:
+                failing_line.record_next_line()
                 raise ValueError("expected failure")
             return 1
 
-        with self.assertRaises(ValueError):
+        with assertRaisesWithLineInStackTrace(self, ValueError, failing_line):
             await sample_failing_fn()
         self.assertEqual(counter.get_incremented(), 2)
-        with self.assertRaises(ValueError):
+        with assertRaisesWithLineInStackTrace(self, ValueError, failing_line):
             await sample_failing_fn()
         # This ensures that this was a new function call, not a cached result.
         self.assertEqual(counter.get_incremented(), 4)
@@ -1168,6 +1222,7 @@ class TestOnceAsync(unittest.IsolatedAsyncioTestCase):
 
     async def test_failing_generator(self) -> None:
         counter = Counter()
+        failing_line = LineCapture()
 
         @once.once
         async def sample_failing_fn():
@@ -1175,6 +1230,7 @@ class TestOnceAsync(unittest.IsolatedAsyncioTestCase):
             result = counter.get_incremented()
             yield result
             if result == 2:
+                failing_line.record_next_line()
                 raise ValueError("we raise an error when result is exactly 2")
 
         # Both of these calls should return the same results.
@@ -1184,9 +1240,9 @@ class TestOnceAsync(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await anext(call2), 1)
         self.assertEqual(await anext(call1), 2)
         self.assertEqual(await anext(call2), 2)
-        with self.assertRaises(ValueError):
+        with assertRaisesWithLineInStackTrace(self, ValueError, failing_line):
             await anext(call1)
-        with self.assertRaises(ValueError):
+        with assertRaisesWithLineInStackTrace(self, ValueError, failing_line):
             await anext(call2)
         # These next 2 calls should also fail.
         call3 = sample_failing_fn()
@@ -1195,13 +1251,14 @@ class TestOnceAsync(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await anext(call4), 1)
         self.assertEqual(await anext(call3), 2)
         self.assertEqual(await anext(call4), 2)
-        with self.assertRaises(ValueError):
+        with assertRaisesWithLineInStackTrace(self, ValueError, failing_line):
             await anext(call3)
-        with self.assertRaises(ValueError):
+        with assertRaisesWithLineInStackTrace(self, ValueError, failing_line):
             await anext(call4)
 
     async def test_failing_generator_retry_exceptions(self) -> None:
         counter = Counter()
+        failing_line = LineCapture()
 
         @once.once(retry_exceptions=True)
         async def sample_failing_fn():
@@ -1209,6 +1266,7 @@ class TestOnceAsync(unittest.IsolatedAsyncioTestCase):
             result = counter.get_incremented()
             yield result
             if result == 2:
+                failing_line.record_next_line()
                 raise ValueError("we raise an error when result is exactly 2")
 
         # Both of these calls should return the same results.
@@ -1218,9 +1276,9 @@ class TestOnceAsync(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await anext(call2), 1)
         self.assertEqual(await anext(call1), 2)
         self.assertEqual(await anext(call2), 2)
-        with self.assertRaises(ValueError):
+        with assertRaisesWithLineInStackTrace(self, ValueError, failing_line):
             await anext(call1)
-        with self.assertRaises(ValueError):
+        with assertRaisesWithLineInStackTrace(self, ValueError, failing_line):
             await anext(call2)
         # These next 2 calls should succeed.
         call3 = sample_failing_fn()
