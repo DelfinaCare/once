@@ -33,6 +33,13 @@ classifiers = [
     "Operating System :: OS Independent",
 ]
 
+[project.optional-dependencies]
+dev = [
+  "mypy >=1.11.2",
+  "pytest >= 9.0.0",
+  "typing-extensions >= 4.15.0",
+]
+
 [project.urls]
 Homepage = "https://github.com/DelfinaCare/once"
 Issues = "https://github.com/DelfinaCare/once/issues"
