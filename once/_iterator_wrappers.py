@@ -4,20 +4,7 @@ import collections.abc
 import enum
 import functools
 import threading
-import time
 import typing
-
-# Before we begin, a note on the assert statements in this file:
-# Why are we using assert in here, you might ask, instead of implementing "proper" error handling?
-# In this case, it is actually not being done out of laziness! The assert statements here
-# represent our assumptions about the state at that point in time, and are always called with locks
-# held, so they **REALLY** should always hold. If the assumption behind one of these asserts fails,
-# the subsequent calls are going to fail anyways, so it's not like they are making the code
-# artificially brittle. However, they do make testing easer, because we can directly test our
-# assumption instead of having hard-to-trace errors, and also serve as very convenient
-# documentation of the assumptions.
-# We are always open to suggestions if there are other ways to achieve the same functionality in
-# python!
 
 
 class IteratorResults:
@@ -217,7 +204,7 @@ class AsyncGeneratorWrapper(_GeneratorWrapperBase):
             except StopAsyncIteration:
                 async with self.lock:
                     self.record_successful_completion(result)
-            except Exception as e:
+            except Exception as e:  # pylint: disable=broad-except
                 async with self.lock:
                     self.record_exception(result, e)
             else:
@@ -278,7 +265,7 @@ class GeneratorWrapper(_GeneratorWrapperBase):
             except StopIteration:
                 with self.lock:
                     self.record_successful_completion(result)
-            except Exception as e:
+            except Exception as e:  # pylint: disable=broad-except
                 with self.lock:
                     self.record_exception(result, e)
             else:
