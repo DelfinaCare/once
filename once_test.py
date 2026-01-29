@@ -18,7 +18,6 @@ import typing_extensions
 
 import once
 
-
 # This is a "large" number of workers to schedule function calls in parallel.
 _N_WORKERS = 32
 # The default is for thread switching to occur every 5ms. Because most of the
