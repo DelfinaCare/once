@@ -19,7 +19,7 @@ jobs:
         python-version: 3.13
         cache: pip
     - run: pip wheel .
-    - uses: actions/upload-artifact@v6
+    - uses: actions/upload-artifact@v7
       with:
         name: wheel
         path: ./*.whl
